@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+<Document><name>Yosemite &lt;Valley&gt; &amp; &quot;Mist&quot;</name><open>1</open>
+<Style id="s-f1"><LineStyle><color>ff0F48D9</color><width>4</width></LineStyle><PolyStyle><color>550F48D9</color></PolyStyle></Style>
+<Style id="s-f2"><LineStyle><color>ff447D3A</color><width>4</width></LineStyle><PolyStyle><color>55447D3A</color></PolyStyle></Style>
+<Style id="s-f3"><IconStyle><color>ffB26F1F</color><scale>1.1</scale><Icon><href>https://maps.google.com/mapfiles/kml/shapes/hiker.png</href></Icon></IconStyle></Style>
+<Style id="s-f4"><IconStyle><color>ffB26F1F</color><scale>1.1</scale><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>
+<Folder><name>Trails</name><open>1</open>
+<Placemark><name>Mist Trail &lt;&amp;&quot;&apos;&gt; 🥾</name><description>Steep granite steps.
+Bring water.
+Length: 0.77 mi</description><styleUrl>#s-f1</styleUrl><LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>-119.5581235,37.7271346,0 -119.5512000,37.7265000,0 -119.5435778,37.7259100,0</coordinates></LineString></Placemark>
+</Folder>
+<Folder><name>Areas</name>
+<Placemark><name>Emerald Pool</name><description>Perimeter: 0.53 mi</description><styleUrl>#s-f2</styleUrl><Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>-119.5421000,37.7281000,0 -119.5409000,37.7283000,0 -119.5405000,37.7274000,0 -119.5421000,37.7281000,0</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
+</Folder>
+<Folder><name>Points of interest</name>
+<Placemark><name>Happy Isles Trailhead</name><description>Shuttle stop 16</description><styleUrl>#s-f3</styleUrl><ExtendedData><Data name="type"><value>Trailhead</value></Data></ExtendedData><Point><coordinates>-119.5578000,37.7327000,0</coordinates></Point></Placemark>
+<Placemark><name>Tap &amp; &quot;fountain&quot;</name><styleUrl>#s-f4</styleUrl><ExtendedData><Data name="type"><value>Water</value></Data></ExtendedData><Point><coordinates>-119.5560000,37.7300000,0</coordinates></Point></Placemark>
+</Folder>
+</Document>
+</kml>

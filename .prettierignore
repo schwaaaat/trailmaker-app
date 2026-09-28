@@ -1,0 +1,11 @@
+pnpm-lock.yaml
+reference/
+src/core/
+src/ui/contract.ts
+tests/fixtures/generated/
+tests/fixtures/schema/
+dist/
+coverage/
+worktrees/
+test-results/
+playwright-report/

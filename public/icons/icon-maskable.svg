@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Full-bleed background for maskable icon -->
+  <rect width="512" height="512" fill="#24412f"/>
+  <!-- Scaled and centered within central 80% safe zone (scale 0.7400) -->
+  <g transform="translate(66.56, 66.56) scale(0.7400)">
+    <!-- Base contact shadow under map -->
+    <polygon points="48,422 184,372 320,422 464,372 464,382 320,432 184,382 48,432" fill="#17231c" opacity="0.3"/>
+
+    <!-- Map Fold 1 (Left - Cream) -->
+    <polygon points="48,150 184,100 184,370 48,420" fill="#f7f5ea"/>
+
+    <!-- Map Fold 2 (Center - Shaded sage) -->
+    <polygon points="184,100 320,150 320,420 184,370" fill="#8ea48a"/>
+
+    <!-- Map Fold 3 (Right - Fresh paper) -->
+    <polygon points="320,150 464,100 464,370 320,420" fill="#dce3d6"/>
+
+    <!-- Crease highlights & shadows -->
+    <line x1="184" y1="100" x2="184" y2="370" stroke="#ffffff" stroke-width="2.5" opacity="0.6"/>
+    <line x1="320" y1="150" x2="320" y2="420" stroke="#17231c" stroke-width="3" opacity="0.25"/>
+
+    <!-- Topographic contour curves -->
+    <path d="M 64 260 Q 120 220 184 210" fill="none" stroke="#6f856c" stroke-width="3" stroke-linecap="round" opacity="0.35"/>
+    <path d="M 64 310 Q 120 270 184 260" fill="none" stroke="#6f856c" stroke-width="3" stroke-linecap="round" opacity="0.35"/>
+    <path d="M 184 210 Q 250 250 320 230" fill="none" stroke="#6f856c" stroke-width="3" stroke-linecap="round" opacity="0.3"/>
+    <path d="M 184 350 Q 250 380 320 370" fill="none" stroke="#6f856c" stroke-width="3" stroke-linecap="round" opacity="0.3"/>
+    <path d="M 320 230 Q 380 200 448 180" fill="none" stroke="#6f856c" stroke-width="3" stroke-linecap="round" opacity="0.35"/>
+    <path d="M 320 310 Q 380 280 448 260" fill="none" stroke="#6f856c" stroke-width="3" stroke-linecap="round" opacity="0.35"/>
+
+    <!-- GPS Trail Underlay (Forest contrast outline) -->
+    <path d="M 86 360 C 120 360, 134 260, 184 245 C 234 230, 248 310, 305 275 C 342 250, 368 206, 392 166"
+          fill="none" stroke="#24412f" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Active Blaze Trail Ribbon -->
+    <path d="M 86 360 C 120 360, 134 260, 184 245 C 234 230, 248 310, 305 275 C 342 250, 368 206, 392 166"
+          fill="none" stroke="#f2b531" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Trailhead Starting Node -->
+    <circle cx="86" cy="360" r="14" fill="#f7f5ea" stroke="#24412f" stroke-width="5"/>
+
+    <!-- Calibration Anchor Node 1 -->
+    <circle cx="184" cy="245" r="14" fill="#f7f5ea" stroke="#24412f" stroke-width="5"/>
+    <circle cx="184" cy="245" r="4.5" fill="#f2b531"/>
+
+    <!-- Calibration Anchor Node 2 -->
+    <circle cx="305" cy="275" r="14" fill="#f7f5ea" stroke="#24412f" stroke-width="5"/>
+    <circle cx="305" cy="275" r="4.5" fill="#f2b531"/>
+
+    <!-- Destination GPS Waypoint Pin -->
+    <g>
+      <!-- Ground Shadow -->
+      <ellipse cx="392" cy="172" rx="18" ry="8" fill="#17231c" opacity="0.35"/>
+
+      <!-- Pin Outer Dark Forest Halo -->
+      <path d="M 392 166 C 378 148, 344 110, 344 76 A 48,48 0 1,1 440 76 C 440 110, 406 148, 392 166 Z"
+            fill="#24412f"/>
+
+      <!-- Pin Blaze Body -->
+      <path d="M 392 158 C 380 142, 352 108, 352 76 A 40,40 0 1,1 432 76 C 432 108, 404 142, 392 158 Z"
+            fill="#f2b531"/>
+
+      <!-- Pin Inner Target Core -->
+      <circle cx="392" cy="76" r="16" fill="#24412f"/>
+      <circle cx="392" cy="76" r="7" fill="#f7f5ea"/>
+    </g>
+  </g>
+</svg>

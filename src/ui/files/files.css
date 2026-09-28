@@ -1,0 +1,121 @@
+/* Lane C. File UI styles (card T-304) */
+.map-drop-zone {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.map-drop-zone.drag-over .empty-state .drop,
+.map-drop-zone.drag-over .drop-indicator {
+  border-color: var(--blaze);
+  background: var(--panel);
+}
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: auto;
+  z-index: 3;
+}
+
+.empty-state .drop {
+  max-width: 440px;
+  text-align: center;
+  padding: 34px 28px;
+  border: 2px dashed var(--muted);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.empty-state h3 {
+  font: 600 24px/1.2 var(--slab);
+  margin: 12px 0 6px;
+  color: var(--ink);
+}
+
+.empty-state p {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+.empty-state svg {
+  color: var(--forest);
+}
+
+.empty-state.over .drop {
+  border-color: var(--blaze);
+  background: var(--panel);
+}
+
+.page-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.page-picker label {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.page-picker select {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.btn.arm {
+  background: var(--blaze);
+  color: var(--blaze-ink);
+  border-color: var(--blaze);
+}
+
+#resume {
+  margin-top: 14px;
+}
+
+.btn.blaze {
+  background: var(--blaze);
+  color: var(--blaze-ink);
+  border-color: var(--blaze);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.btn.blaze:hover:not(:disabled) {
+  filter: brightness(0.96);
+  cursor: pointer;
+}
+
+/* Focus ring with at least 3:1 contrast on every focusable element (card T-311, Acceptance 2) */
+.page-picker select:focus-visible,
+.empty-state .btn:focus-visible,
+#resumeBtn:focus-visible,
+.map-drop-zone .btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* Screen-reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+

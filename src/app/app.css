@@ -1,0 +1,1026 @@
+/* Lane B. App shell styles, ported from the prototype (tokens, layout, stage, overlays). */
+:root {
+  --paper: #dce3d6;
+  --panel: #f5f7f1;
+  --panel2: #ecf0e6;
+  --ink: #17231c;
+  --muted: #56665c;
+  --line: #c6cfc0;
+  --forest: #24412f;
+  --forest-ink: #f1eedc;
+  --blaze: #f2b531;
+  --blaze-ink: #231a00;
+  --danger: #b5352a;
+  --ok: #2f7a4b;
+  --sans: 'Atkinson Hyperlegible', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --slab: 'Bitter', Rockwell, 'Roboto Slab', Georgia, serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f1512;
+    --panel: #18201b;
+    --panel2: #1f2923;
+    --ink: #e5ebe2;
+    --muted: #9baaa0;
+    --line: #2f3b34;
+    --forest: #2a4b37;
+    --danger: #e0685d;
+    --ok: #62b784;
+    color-scheme: dark;
+  }
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font: 15px/1.45 var(--sans);
+  color: var(--ink);
+  background: var(--panel);
+  overflow: hidden;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+/* Two-tone ring (T-215): a 3px blaze outline (2-5px out) with an ink halo both inside it
+   (0-2px, box-shadow fills solid from the border out) and outside it (5-7px, past where the
+   outline covers the shadow). Blaze alone is 1.4:1 on --paper and 1.7:1 on --panel in light
+   mode (fails WCAG 1.4.11's 3:1); the outer ink ring is >= 12:1 against every panel/paper/ink
+   background this app uses in both themes, so the ring's outer edge always clears 3:1. */
+:focus-visible {
+  outline: 3px solid var(--blaze);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 7px var(--ink);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 352px 1fr;
+  grid-template-rows: auto 1fr;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* header */
+.app-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  background: var(--forest);
+  color: var(--forest-ink);
+}
+.app-header h1 {
+  margin: 0;
+  font: 700 22px/1.1 var(--slab);
+  letter-spacing: 0.01em;
+}
+.map-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 420px;
+  font-size: 13px;
+}
+.map-name input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(241, 238, 220, 0.12);
+  color: var(--forest-ink);
+}
+.map-name input:disabled {
+  opacity: 0.6;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.seg button {
+  border: 0;
+  background: var(--panel2);
+  color: var(--ink);
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+.seg button[aria-pressed='true'] {
+  background: var(--blaze);
+  color: var(--blaze-ink);
+}
+.seg button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* sidebar */
+.side {
+  overflow-y: auto;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.step {
+  padding: 14px 16px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.step:last-child {
+  border-bottom: 0;
+}
+.step h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  font: 600 17px/1.25 var(--slab);
+}
+.step h2 .n {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--forest);
+  color: var(--forest-ink);
+  font: 700 13px/1 var(--sans);
+}
+.hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+/* buttons + fields (prototype) */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+}
+.btn:hover {
+  border-color: var(--muted);
+}
+.btn.primary {
+  background: var(--forest);
+  border-color: var(--forest);
+  color: var(--forest-ink);
+}
+.btn.small {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.btn.wide {
+  width: 100%;
+  margin-top: 12px;
+}
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.georef-toggle {
+  margin-top: 10px;
+}
+.georef-toggle .hint {
+  margin: 6px 0 0;
+}
+/* Lane C's consent overlay (georef.css) is sized to cover a positioned map pane; here it's
+   an inline card in the sidebar, not an overlay, so it lays out in normal flow instead. */
+.georef-toggle .trailmaker-basemap-consent-overlay,
+.georef-toggle .trailmaker-basemap-disabled-placeholder {
+  position: static;
+  inset: auto;
+  padding: 0;
+  background: none;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.x {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.x:hover {
+  color: var(--danger);
+}
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+/* step 3: trace */
+.sub {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.sub h3 {
+  margin: 0 0 4px;
+  font: 600 15px/1.3 var(--slab);
+}
+.mini {
+  font-size: 12px;
+}
+.val {
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.range input {
+  flex: 1;
+  accent-color: var(--forest);
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+.toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--forest);
+}
+.inkrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 2px solid var(--line);
+  background: repeating-linear-gradient(45deg, var(--panel2) 0 4px, var(--line) 4px 8px);
+  flex: none;
+}
+.chips {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chip {
+  display: grid;
+  grid-template-columns: auto 26px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: var(--panel2);
+}
+.chip input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--forest);
+  margin: 0;
+}
+.chip .sw {
+  width: 26px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+.chip input[type='text'] {
+  min-width: 0;
+  border: 1px solid transparent;
+  background: none;
+  padding: 3px 5px;
+  border-radius: 5px;
+  font-size: 13.5px;
+}
+.chip input[type='text']:hover,
+.chip input[type='text']:focus {
+  border-color: var(--line);
+  background: var(--panel);
+}
+.chip .meta {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.chip.off {
+  opacity: 0.6;
+}
+.job {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.job-stage {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+.job-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--panel2);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.job-bar span {
+  display: block;
+  height: 100%;
+  background: var(--forest);
+}
+.cands {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 9px;
+  border: 2px solid var(--blaze);
+  background: var(--panel2);
+}
+.cands p {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+}
+.cands ul {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cands li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cands li label {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.cands li label:hover {
+  background: var(--panel);
+}
+.cands .ln {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  display: block;
+}
+.swatches {
+  display: flex;
+  gap: 2px;
+}
+.conf {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+  background: var(--panel);
+  color: var(--muted);
+}
+.conf-high {
+  color: var(--ok);
+}
+.conf-low {
+  color: var(--danger);
+}
+.btn.tiny {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.fname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flen {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* steps: locked / done (prototype renderSteps) */
+.step.done h2 .n {
+  background: var(--ok);
+}
+/* T-215 review: this used to be `.step.locked { opacity: 0.55 }`, which dims every descendant
+   equally -- including .hint's already-low-contrast --muted text and the h2 heading -- and axe
+   measured the rendered result at 3.65:1 against --panel, short of the 4.5:1 normal-text
+   minimum (computed via node -e, WCAG relative luminance: opacity blends toward whatever's
+   behind it, and --muted in particular fails 4.5:1 at any opacity below 1). Body text keeps its
+   full, already-passing contrast; only the step-number badge is greyed out to signal "locked". */
+.step.locked h2 .n {
+  background: var(--line);
+  color: var(--ink);
+}
+
+/* fields */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.field input,
+.field select,
+.field textarea {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel2);
+  color: var(--ink);
+  font-size: 14px;
+  width: 100%;
+}
+.field textarea {
+  resize: vertical;
+  min-height: 52px;
+  font: inherit;
+  font-size: 14px;
+}
+.btn.danger {
+  color: var(--danger);
+}
+
+/* step 2: anchors + fit */
+.anchors {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.anc {
+  display: grid;
+  grid-template-columns: 26px 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+  padding: 5px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.anc.sel {
+  border-color: var(--blaze);
+  background: var(--panel2);
+}
+.anc .pin {
+  width: 24px;
+  height: 24px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--blaze);
+  display: grid;
+  place-items: center;
+}
+.anc .pin b {
+  transform: rotate(45deg);
+  font-size: 12px;
+  color: var(--blaze-ink);
+}
+.anc.empty .pin {
+  background: transparent;
+  border: 2px dashed var(--blaze);
+}
+.anc.empty .pin b {
+  color: var(--ink);
+}
+.anc input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel2);
+  font-size: 13.5px;
+}
+.anc input.bad {
+  border-color: var(--danger);
+}
+.anc .res {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.anc .res.hi {
+  color: var(--danger);
+  font-weight: 700;
+}
+.fit {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--panel2);
+  font-size: 13.5px;
+}
+.fit.good {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+.fit.warn {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+/* step 3: draft bar, features, editor */
+.draftbar {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--blaze);
+  color: var(--blaze-ink);
+  font-size: 13.5px;
+}
+.draftbar .row {
+  margin-top: 8px;
+}
+.draftbar .btn {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: transparent;
+  color: var(--blaze-ink);
+}
+.draftbar .btn.primary {
+  background: var(--blaze-ink);
+  color: var(--blaze);
+}
+.feats {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.feats li button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 9px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.feats li button:hover {
+  background: var(--panel2);
+}
+.feats li.sel button {
+  background: var(--panel2);
+  box-shadow: inset 3px 0 0 var(--blaze);
+}
+.glyph {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+}
+.glyph i {
+  display: block;
+}
+.glyph .ln {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+}
+.glyph .pt {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.glyph .ar {
+  width: 15px;
+  height: 13px;
+  border-radius: 3px;
+  border: 2px solid;
+  opacity: 0.9;
+}
+.empty-note {
+  font-size: 13.5px;
+  color: var(--muted);
+  margin: 10px 0 0;
+}
+.editor {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+}
+.editor .field {
+  margin-top: 0;
+}
+.editor .field input,
+.editor .field select,
+.editor .field textarea {
+  background: var(--panel);
+}
+.editor .row {
+  margin-top: 10px;
+}
+.two {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  gap: 8px;
+}
+.two input[type='color'] {
+  height: 38px;
+  padding: 3px;
+}
+
+/* step 4: export */
+.sum {
+  font-size: 14px;
+  margin: 0 0 10px;
+}
+.hint.warn {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel2);
+  box-shadow: inset 3px 0 0 var(--danger);
+  color: var(--ink);
+}
+.units-row {
+  margin-bottom: 10px;
+}
+.units-row .hint {
+  margin: 0;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stack .btn.wide {
+  margin-top: 0;
+}
+.fine {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+.save-row {
+  margin-top: 12px;
+}
+
+/* stage (T-212: a flex row so the georef split can sit beside the editor pane) */
+.stage {
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+  background: var(--paper);
+  overflow: hidden;
+}
+.stage.narrow {
+  flex-direction: column;
+}
+.stage-editor {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.stage:not(.split) .stage-editor {
+  flex-basis: 100%;
+}
+.split-divider {
+  flex: 0 0 auto;
+  background: var(--line);
+  touch-action: none;
+  z-index: 4;
+}
+.split-divider.vertical {
+  width: 6px;
+  cursor: col-resize;
+}
+.split-divider.horizontal {
+  height: 6px;
+  cursor: row-resize;
+}
+.split-divider:hover,
+.split-divider:focus-visible {
+  background: var(--blaze);
+}
+.stage-georef {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel2);
+}
+.stage-georef .seg {
+  flex: 0 0 auto;
+  z-index: 3;
+}
+.stage-georef > :is(.trailmaker-basemap-pane, .trailmaker-overlay-preview) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.editor-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* toolbar + tip (prototype #toolbar / #tip) */
+.toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgba(20, 30, 24, 0.18);
+  flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+  z-index: 3;
+}
+.toolbar-group {
+  display: contents;
+}
+.toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.toolbar button:hover {
+  background: var(--panel2);
+}
+.toolbar button[aria-pressed='true'] {
+  background: var(--blaze);
+  color: var(--blaze-ink);
+}
+.toolbar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.toolbar kbd {
+  font: 11px var(--sans);
+  opacity: 0.6;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.toolbar .sep {
+  width: 1px;
+  background: var(--line);
+  margin: 4px 3px;
+}
+/* Never intercepts map clicks. */
+.tip {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  max-width: min(560px, calc(100% - 24px));
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 13.5px;
+  box-shadow: 0 4px 14px rgba(20, 30, 24, 0.15);
+  pointer-events: none;
+  z-index: 2;
+}
+.tip:empty {
+  display: none;
+}
+/* T-209: right-click vertex menu. client.x/y are viewport coordinates (Editor.imageToClient). */
+.vertex-menu {
+  position: fixed;
+  transform: translate(-4px, 8px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgba(20, 30, 24, 0.2);
+  z-index: 6;
+}
+.vertex-menu button {
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  font-size: 13.5px;
+}
+.vertex-menu button:hover {
+  background: var(--line);
+}
+.editor-canvas:focus {
+  outline: none;
+}
+.editor-canvas:focus-visible {
+  /* Inset, not the global ring: the canvas fills the stage, so an outward ring would draw off
+     it. Two bands for the same reason as the global rule, both inset: the map underneath is
+     arbitrary imagery, not one of the theme's known backgrounds. */
+  outline: 3px solid var(--blaze);
+  outline-offset: -3px;
+  box-shadow: inset 0 0 0 6px var(--ink);
+}
+
+/* overlays */
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 64px;
+  transform: translate(-50%, -8px);
+  opacity: 0;
+  transition:
+    opacity 0.18s,
+    transform 0.18s;
+  background: var(--ink);
+  color: var(--panel);
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-size: 14px;
+  max-width: min(90%, 520px);
+  text-align: center;
+  pointer-events: none;
+  z-index: 5;
+}
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.toast:empty {
+  padding: 0;
+}
+.busy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--paper) 60%, transparent);
+  font-weight: 700;
+  z-index: 6;
+}
+.busy-box {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+/* keyboard shortcuts help dialog (T-215) */
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 20;
+}
+.dialog {
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 18px 22px;
+  max-width: min(90vw, 480px);
+  max-height: 80vh;
+  overflow: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+.help-dialog table {
+  border-collapse: collapse;
+  margin: 10px 0;
+}
+.help-dialog td {
+  padding: 3px 10px 3px 0;
+  vertical-align: top;
+}
+.help-dialog kbd {
+  font: 12px var(--sans);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+@media (max-width: 820px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(300px, 58%) 1fr;
+  }
+  .stage {
+    grid-row: 2;
+  }
+  .toolbar kbd,
+  .toolbar .lbl {
+    display: none;
+  }
+  .tip {
+    font-size: 12.5px;
+  }
+  .side {
+    grid-row: 3;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    transition: none;
+  }
+}

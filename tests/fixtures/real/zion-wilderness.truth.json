@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "Zion West Rim Trail",
+  "image": "zion-wilderness.png",
+  "sourcePdf": "zion-wilderness.pdf",
+  "page": 1,
+  "renderScale": 1.5,
+  "baseline": { "recall": 1.0, "precision": 0.9994382672330362 },
+  "trace": {
+    "color": [174, 107, 85],
+    "tolerance": 40,
+    "gapPx": 8,
+    "minLengthPx": 50,
+    "pts": [[782, 940], [802, 960], [801, 980], [809, 1000], [816, 1020], [820, 1040], [826, 1060], [836, 1080], [837, 1100], [857, 1120], [857, 1140], [876, 1160]]
+  },
+  "anchors": [
+    { "id": "kolob-canyons-visitor-center", "px": [216, 578], "ll": [37.453462, -113.22564], "source": "paste" },
+    { "id": "lava-point-overlook", "px": [714, 927], "ll": [37.38371, -113.02837], "source": "paste" },
+    { "id": "temple-of-sinawava", "px": [1000, 1290], "ll": [37.2847038, -112.947996], "source": "paste" },
+    { "id": "zion-canyon-visitor-center", "px": [860, 1620], "ll": [37.20019, -112.987139], "source": "paste" }
+  ]
+}

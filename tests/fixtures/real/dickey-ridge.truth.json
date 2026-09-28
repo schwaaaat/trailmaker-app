@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "Dickey Ridge Snead Farm Loop",
+  "image": "dickey-ridge.png",
+  "sourcePdf": "dickey-ridge.pdf",
+  "page": 1,
+  "renderScale": 1.5,
+  "baseline": { "recall": 0.8756506619, "precision": 0.2937500485 },
+  "trace": {
+    "color": [0, 0, 0],
+    "tolerance": 60,
+    "pts": [[551, 772], [559, 780], [568, 793], [577, 805], [588, 821], [600, 837], [600, 850], [589, 863], [573, 875], [550, 886], [524, 896], [496, 907], [473, 918], [455, 933], [441, 951]]
+  },
+  "anchors": [
+    { "id": "visitor-center", "px": [437, 339], "ll": [38.871724, -78.204659], "source": "paste" },
+    { "id": "signal-knob-overlook", "px": [351, 709], "ll": [38.8584471, -78.2088894], "source": "paste" },
+    { "id": "dickey-hill", "px": [423, 840], "ll": [38.8548361, -78.2050005], "source": "paste" },
+    { "id": "snead-barn", "px": [540, 766], "ll": [38.85645, -78.20034], "source": "paste" }
+  ]
+}

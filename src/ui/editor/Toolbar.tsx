@@ -1,0 +1,162 @@
+/** @jsxRuntime automatic */
+// Lane B. Map toolbar and tip line over the editor stage (prototype #toolbar / #tip).
+import type { ReactNode } from 'react';
+import { useApp } from '../../state/hooks';
+import { setHelpOpen, type Tool } from '../../state/store';
+import { currentEditor } from './EditorStage';
+import { chooseTool, redoAction, tipFor, undoAction } from './tools';
+
+const ICONS: Readonly<Record<string, ReactNode>> = {
+  select: <path d="M5 3l14 8-6 2-3 6z" strokeLinejoin="round" />,
+  anchor: (
+    <>
+      <path d="M12 22s7-7 7-12a7 7 0 10-14 0c0 5 7 12 7 12z" />
+      <circle cx="12" cy="10" r="2.5" />
+    </>
+  ),
+  trail: (
+    <>
+      <path d="M4 20c3-1 3-6 7-7s5-5 9-9" strokeLinecap="round" />
+      <circle cx="4" cy="20" r="1.5" fill="currentColor" />
+      <circle cx="20" cy="4" r="1.5" fill="currentColor" />
+    </>
+  ),
+  point: <path d="M6 21V4h11l-2 4 2 4H6" strokeLinejoin="round" />,
+  area: <path d="M4 7l7-4 9 5-2 11-11 2z" strokeLinejoin="round" />,
+  fit: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" strokeLinecap="round" />,
+  undo: (
+    <>
+      <path d="M9 14L4 9l5-5" />
+      <path d="M4 9h10a6 6 0 010 12h-3" />
+    </>
+  ),
+  redo: (
+    <>
+      <path d="M15 14l5-5-5-5" />
+      <path d="M20 9H10a6 6 0 000 12h3" />
+    </>
+  ),
+};
+
+function Icon({ name }: { name: string }) {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {ICONS[name]}
+    </svg>
+  );
+}
+
+/** Exported for the keyboard shortcuts help dialog (T-215), so its tool list can't drift from
+ * the toolbar's. */
+export const TOOLS: readonly { tool: Tool; label: string; title: string; key: string }[] = [
+  { tool: 'select', label: 'Select', title: 'Select and move', key: 'V' },
+  { tool: 'anchor', label: 'Anchor', title: 'Add anchor', key: 'A' },
+  { tool: 'trail', label: 'Trail', title: 'Trace a trail', key: 'T' },
+  { tool: 'point', label: 'Point', title: 'Add a point of interest', key: 'P' },
+  { tool: 'area', label: 'Area', title: 'Outline an area', key: 'R' },
+];
+
+export function Toolbar() {
+  const open = useApp((s) => s.session !== null);
+  const tool = useApp((s) => s.tool);
+  const drafting = useApp((s) => s.draft !== null);
+  const canUndo = useApp((s) => s.history.canUndo);
+  const canRedo = useApp((s) => s.history.canRedo);
+  const reviewCanUndo = useApp((s) => s.reviewUndoStack.length > 0);
+  // The map-tool buttons need an open session; the "Keyboard shortcuts" help below (T-215) does
+  // not, so the toolbar landmark and that one button stay mounted either way -- a user can check
+  // the shortcuts before opening a map.
+  return (
+    <div className="toolbar" role="toolbar" aria-label="Map tools">
+      {open && (
+        <>
+          {TOOLS.map((t, i) => (
+            <span key={t.tool} className="toolbar-group">
+              {i === 1 || i === 2 ? <span className="sep" aria-hidden="true" /> : null}
+              <button
+                type="button"
+                aria-label={t.label}
+                aria-pressed={tool === t.tool}
+                aria-keyshortcuts={t.key}
+                title={`${t.title} (${t.key})`}
+                onClick={() => chooseTool(t.tool)}
+              >
+                <Icon name={t.tool} />
+                <span className="lbl" aria-hidden="true">
+                  {t.label}
+                </span>{' '}
+                <kbd aria-hidden="true">{t.key}</kbd>
+              </button>
+            </span>
+          ))}
+          <span className="sep" aria-hidden="true" />
+          <button
+            type="button"
+            aria-label="Fit map to view"
+            aria-keyshortcuts="F"
+            title="Fit map to view (F)"
+            onClick={() => currentEditor()?.fitView()}
+          >
+            <Icon name="fit" />
+          </button>
+          <button
+            type="button"
+            aria-label="Undo"
+            aria-keyshortcuts="Control+Z Meta+Z"
+            title="Undo (Ctrl+Z)"
+            disabled={!canUndo && !drafting && !reviewCanUndo}
+            onClick={undoAction}
+          >
+            <Icon name="undo" />
+          </button>
+          <button
+            type="button"
+            aria-label="Redo"
+            aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+            title="Redo (Ctrl+Shift+Z)"
+            disabled={!canRedo || drafting}
+            onClick={redoAction}
+          >
+            <Icon name="redo" />
+          </button>
+          <span className="sep" aria-hidden="true" />
+        </>
+      )}
+      <button
+        type="button"
+        aria-label="Keyboard shortcuts"
+        aria-keyshortcuts="?"
+        title="Keyboard shortcuts (?)"
+        onClick={() => setHelpOpen(true)}
+      >
+        ?
+      </button>
+    </div>
+  );
+}
+
+export function TipLine() {
+  const text = useApp((s) =>
+    tipFor({
+      hasMap: s.session !== null,
+      tool: s.tool,
+      smartFollow: s.session?.project.trace.smartFollow ?? false,
+      reviewing: s.candidates !== null,
+    }),
+  );
+  return (
+    <div className="tip" aria-live="polite">
+      {text}
+    </div>
+  );
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Trailmaker" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:gpx_style="http://www.topografix.com/GPX/gpx_style/0/2" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata><name>Yosemite &lt;Valley&gt; &amp; &quot;Mist&quot;</name><time>2026-09-24T12:00:00.000Z</time></metadata>
+<wpt lat="37.7327000" lon="-119.5578000"><name>Happy Isles Trailhead</name><desc>Shuttle stop 16</desc><sym>Trailhead</sym><type>Trailhead</type></wpt>
+<wpt lat="37.7300000" lon="-119.5560000"><name>Tap &amp; &quot;fountain&quot;</name><sym>Drinking Water</sym><type>Water</type></wpt>
+<trk><name>Mist Trail &lt;&amp;&quot;&apos;&gt; 🥾</name><desc>Steep granite steps.
+Bring water.
+Length: 0.77 mi</desc><type>Trail</type><extensions><gpx_style:line><gpx_style:color>D9480F</gpx_style:color><gpx_style:width>4</gpx_style:width></gpx_style:line></extensions>
+<trkseg>
+<trkpt lat="37.7271346" lon="-119.5581235"/>
+<trkpt lat="37.7265000" lon="-119.5512000"/>
+<trkpt lat="37.7259100" lon="-119.5435778"/>
+</trkseg></trk>
+<trk><name>Emerald Pool</name><desc>Perimeter: 0.53 mi</desc><type>Area</type><extensions><gpx_style:line><gpx_style:color>3A7D44</gpx_style:color><gpx_style:width>4</gpx_style:width></gpx_style:line></extensions>
+<trkseg>
+<trkpt lat="37.7281000" lon="-119.5421000"/>
+<trkpt lat="37.7283000" lon="-119.5409000"/>
+<trkpt lat="37.7274000" lon="-119.5405000"/>
+<trkpt lat="37.7281000" lon="-119.5421000"/>
+</trkseg></trk>
+</gpx>

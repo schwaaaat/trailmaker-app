@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Trailmaker" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:gpx_style="http://www.topografix.com/GPX/gpx_style/0/2" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata><name>Bell park</name><time>2026-09-24T12:00:00.000Z</time></metadata>
+<wpt lat="-0.0000001" lon="0.0000000"><name>Tap &amp; &quot;fountain&quot;</name><sym>Drinking Water</sym><type>Water</type></wpt>
+<trk><name>Tab	and bell</name><desc>nul here
+Length: 1.23 km</desc><type>Trail</type><extensions><gpx_style:line><gpx_style:color>AABBCC</gpx_style:color><gpx_style:width>4</gpx_style:width></gpx_style:line></extensions>
+<trkseg>
+<trkpt lat="-33.8567844" lon="151.2152967"/>
+<trkpt lat="-33.8500000" lon="151.2200000"/>
+</trkseg></trk>
+</gpx>

@@ -1,0 +1,79 @@
+{
+  "app": "trailmaker",
+  "version": 1,
+  "meta": {
+    "name": "Bear Mountain Trail Map",
+    "W": 3200,
+    "H": 2400,
+    "units": "mi",
+    "method": "affine",
+    "tol": 45,
+    "smart": true,
+    "gap": 30,
+    "minPct": 5,
+    "seq": 42,
+    "savedAt": 1727184000000,
+    "gcps": [
+      { "id": "g1", "x": 120, "y": 240, "lat": 41.312, "lon": -74.005 },
+      { "id": "g2", "x": 1500, "y": 1800, "lat": 41.295, "lon": -73.985 },
+      { "id": "g3", "x": 500, "y": 600, "lat": null, "lon": null },
+      { "id": "g4", "x": 800, "y": 900, "lat": "NaN", "lon": "NaN" }
+    ],
+    "features": [
+      {
+        "id": "f1",
+        "type": "trail",
+        "name": "Appalachian Trail",
+        "color": "#D9480F",
+        "notes": "Rocky section",
+        "pts": [[120, 240], [130, 255], [145, 270]],
+        "ink": [217, 72, 15]
+      },
+      {
+        "id": "f2",
+        "type": "point",
+        "name": "Trailhead Parking",
+        "sym": "Parking",
+        "color": "#1F6FB2",
+        "notes": "Main lot",
+        "pts": [[120, 240]]
+      },
+      {
+        "id": "f3",
+        "type": "point",
+        "name": "Custom Icon Point",
+        "sym": "NonStandardSymbol",
+        "color": "#1F6FB2",
+        "notes": "Should map to Waypoint",
+        "pts": [[150, 250]]
+      },
+      {
+        "id": "f4",
+        "type": "area",
+        "name": "Campground Area",
+        "color": "#3A7D44",
+        "notes": "Camping permitted",
+        "pts": [[400, 400], [500, 400], [450, 500]]
+      }
+    ],
+    "chips": [
+      {
+        "id": "c1",
+        "rgb": [217, 72, 15],
+        "name": "Red Blazes",
+        "on": true,
+        "share": 0.042,
+        "fromLegend": true
+      },
+      {
+        "id": "c2",
+        "rgb": [31, 111, 178],
+        "name": "Blue Blazes",
+        "on": false,
+        "share": null,
+        "fromLegend": false
+      }
+    ]
+  },
+  "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+}

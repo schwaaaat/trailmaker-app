@@ -1,0 +1,97 @@
+{
+ "type": "FeatureCollection",
+ "name": "Yosemite <Valley> & \"Mist\"",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "Mist Trail <&\"'> 🥾",
+    "kind": "trail",
+    "description": "Steep granite steps.\nBring water.\nLength: 0.77 mi",
+    "stroke": "#D9480F",
+    "length_m": 1235
+   },
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -119.5581235,
+      37.7271346
+     ],
+     [
+      -119.5512,
+      37.7265
+     ],
+     [
+      -119.5435778,
+      37.72591
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "Emerald Pool",
+    "kind": "area",
+    "description": "Perimeter: 0.53 mi",
+    "stroke": "#3A7D44",
+    "length_m": 845
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -119.5421,
+       37.7281
+      ],
+      [
+       -119.5409,
+       37.7283
+      ],
+      [
+       -119.5405,
+       37.7274
+      ],
+      [
+       -119.5421,
+       37.7281
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "Happy Isles Trailhead",
+    "kind": "Trailhead",
+    "description": "Shuttle stop 16",
+    "marker-color": "#1F6FB2"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -119.5578,
+     37.7327
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "Tap & \"fountain\"",
+    "kind": "Water",
+    "marker-color": "#1F6FB2"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -119.556,
+     37.73
+    ]
+   }
+  }
+ ]
+}

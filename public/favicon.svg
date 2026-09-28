@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="32" height="32">
+  <rect width="512" height="512" rx="96" fill="#24412f"/>
+  <g transform="translate(25.60, 31.60) scale(0.9000)">
+    <!-- Base contact shadow under map -->
+    <polygon points="48,422 184,372 320,422 464,372 464,382 320,432 184,382 48,432" fill="#17231c" opacity="0.35"/>
+
+    <!-- Map Fold 1 (Left - Cream) -->
+    <polygon points="48,150 184,100 184,370 48,420" fill="#f7f5ea"/>
+
+    <!-- Map Fold 2 (Center - High contrast deep shaded sage) -->
+    <polygon points="184,100 320,150 320,420 184,370" fill="#7a9276"/>
+
+    <!-- Map Fold 3 (Right - Fresh paper) -->
+    <polygon points="320,150 464,100 464,370 320,420" fill="#dce3d6"/>
+
+    <!-- Crease highlights & shadows -->
+    <line x1="184" y1="100" x2="184" y2="370" stroke="#ffffff" stroke-width="4" opacity="0.7"/>
+    <line x1="320" y1="150" x2="320" y2="420" stroke="#17231c" stroke-width="4" opacity="0.3"/>
+
+    <!-- GPS Trail Underlay (Forest contrast outline) -->
+    <path d="M 86 360 C 120 360, 134 260, 184 245 C 234 230, 248 310, 305 275 C 342 250, 368 206, 392 166"
+          fill="none" stroke="#24412f" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Active Blaze Trail Ribbon -->
+    <path d="M 86 360 C 120 360, 134 260, 184 245 C 234 230, 248 310, 305 275 C 342 250, 368 206, 392 166"
+          fill="none" stroke="#f2b531" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Trailhead Starting Node -->
+    <circle cx="86" cy="360" r="16" fill="#f7f5ea" stroke="#24412f" stroke-width="7"/>
+
+    <!-- Destination GPS Waypoint Pin (Scaled for 16px punch) -->
+    <g transform="translate(392, 166) scale(1.18) translate(-392, -166)">
+      <!-- Ground Shadow -->
+      <ellipse cx="392" cy="172" rx="20" ry="9" fill="#17231c" opacity="0.4"/>
+
+      <!-- Pin Outer Dark Forest Halo -->
+      <path d="M 392 166 C 378 148, 344 110, 344 76 A 48,48 0 1,1 440 76 C 440 110, 406 148, 392 166 Z"
+            fill="#24412f"/>
+
+      <!-- Pin Blaze Body -->
+      <path d="M 392 158 C 380 142, 352 108, 352 76 A 40,40 0 1,1 432 76 C 432 108, 404 142, 392 158 Z"
+            fill="#f2b531"/>
+
+      <!-- Pin Inner Target Core -->
+      <circle cx="392" cy="76" r="18" fill="#24412f"/>
+      <circle cx="392" cy="76" r="8" fill="#f7f5ea"/>
+    </g>
+  </g>
+</svg>

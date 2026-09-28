@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "Acadia Witch Hole carriage road",
+  "image": "acadia-carriage-roads.png",
+  "sourcePdf": "acadia-carriage-roads.pdf",
+  "page": 1,
+  "renderScale": 1.5,
+  "baseline": { "recall": 1.0, "precision": 0.8995095855794919 },
+  "trace": {
+    "color": [255, 255, 255],
+    "tolerance": 60,
+    "gapPx": 0,
+    "minLengthPx": 50,
+    "pts": [[631, 380], [640, 390], [647, 400], [655, 410], [672, 420], [673, 430], [667, 440], [668, 450], [667, 460], [661, 470], [657, 480], [650, 490]]
+  },
+  "anchors": [
+    { "id": "visitor-center", "px": [534, 288], "ll": [44.409286, -68.247501], "source": "paste" },
+    { "id": "park-headquarters", "px": [439, 675], "ll": [44.374423, -68.260078], "source": "paste" },
+    { "id": "cadillac-mountain", "px": [618, 1008], "ll": [44.352643, -68.22461], "source": "paste" }
+  ]
+}

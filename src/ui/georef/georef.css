@@ -1,0 +1,801 @@
+/* Lane C: Georeferencing and basemap UI styles (card T-306) */
+
+.trailmaker-basemap-pane {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.trailmaker-basemap-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.trailmaker-geocoder {
+  position: absolute;
+  z-index: 7;
+  top: 12px;
+  left: 12px;
+  width: min(340px, calc(100% - 64px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+.trailmaker-geocoder-label,
+.trailmaker-geocoder-attribution {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.trailmaker-geocoder-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.trailmaker-geocoder-input:focus-visible {
+  outline: 2px solid var(--blaze);
+}
+.trailmaker-geocoder-results {
+  max-height: 220px;
+  overflow: auto;
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.trailmaker-geocoder-result {
+  padding: 7px 9px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.trailmaker-geocoder-result[aria-selected='true'],
+.trailmaker-geocoder-result:hover {
+  background: var(--panel2);
+}
+.trailmaker-geocoder-attribution {
+  margin: 6px 0 0;
+}
+.trailmaker-geocoder-error {
+  color: var(--danger, #a22);
+  font-size: 12px;
+  margin-top: 5px;
+}
+.trailmaker-geocoder-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 16px;
+  font: 13px/1.4 var(--sans);
+  color: var(--ink);
+}
+.trailmaker-geocoder-settings-disclosure {
+  margin: -8px 0 14px 24px;
+  color: var(--muted);
+  font: 12px/1.4 var(--sans);
+}
+
+/* MapLibre element overrides scoped within pane */
+.trailmaker-basemap-pane .maplibregl-canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+.trailmaker-basemap-pane .maplibregl-ctrl-attrib {
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.trailmaker-basemap-consent-overlay,
+.trailmaker-basemap-disabled-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 5;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+}
+
+.trailmaker-basemap-consent-card,
+.trailmaker-basemap-disabled-card {
+  max-width: 440px;
+  width: 100%;
+  padding: 24px 28px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.trailmaker-basemap-consent-title {
+  font: 600 20px/1.2 var(--slab);
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+
+.trailmaker-basemap-consent-text,
+.trailmaker-basemap-disabled-text {
+  font: 14px/1.45 var(--sans);
+  color: var(--muted);
+  margin: 0 0 20px;
+}
+
+.trailmaker-basemap-consent-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.trailmaker-basemap-settings-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.trailmaker-basemap-settings-btn:hover {
+  border-color: var(--blaze);
+  background: var(--panel2);
+}
+
+.trailmaker-basemap-settings-popover {
+  position: absolute;
+  top: 54px;
+  right: 12px;
+  z-index: 10;
+  width: 320px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+}
+
+.trailmaker-basemap-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.trailmaker-basemap-settings-title {
+  font: 600 16px/1.2 var(--slab);
+  margin: 0;
+  color: var(--ink);
+}
+
+.trailmaker-basemap-close-btn {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.trailmaker-basemap-close-btn:hover {
+  color: var(--ink);
+  background: var(--panel2);
+}
+
+.trailmaker-basemap-setting-row {
+  margin-bottom: 14px;
+}
+
+.trailmaker-basemap-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.trailmaker-basemap-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.trailmaker-basemap-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.trailmaker-basemap-input:focus-visible {
+  outline: 2px solid var(--blaze);
+  border-color: var(--blaze);
+}
+
+.trailmaker-basemap-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.trailmaker-basemap-error-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 90%;
+  padding: 8px 14px;
+  background: var(--panel);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.trailmaker-basemap-error-banner button {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* Prompt banner when pairing is pending (card T-307) */
+.trailmaker-georef-prompt-banner {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  padding: 8px 18px;
+  background: var(--forest);
+  color: var(--forest-ink);
+  font: 600 13.5px/1.2 var(--sans);
+  letter-spacing: 0.01em;
+  border-radius: 20px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  animation: promptFadeIn 0.2s ease-out;
+}
+
+@keyframes promptFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* Basemap cursor when pairing is pending */
+.trailmaker-basemap-container.pairing-pending .maplibregl-canvas {
+  cursor: crosshair !important;
+}
+
+/* Basemap anchor markers */
+.georef-marker {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.georef-marker .pin {
+  width: 24px;
+  height: 24px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--blaze);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  border: 1.5px solid rgba(23, 35, 28, 0.8);
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.georef-marker .pin b {
+  transform: rotate(45deg);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--blaze-ink);
+  font-family: var(--sans);
+}
+
+.georef-marker.selected {
+  z-index: 10 !important;
+}
+
+.georef-marker.selected .pin {
+  border: 2.5px solid var(--ink);
+  box-shadow:
+    0 0 0 3px rgba(242, 181, 49, 0.5),
+    0 3px 8px rgba(0, 0, 0, 0.4);
+  transform: rotate(-45deg) scale(1.1);
+}
+
+.georef-marker.outlier .pin {
+  background: var(--danger);
+  border-color: #ffffff;
+}
+
+.georef-marker.outlier .pin b {
+  color: #ffffff;
+}
+
+.georef-marker:focus-visible {
+  outline: none;
+}
+
+.georef-marker:focus-visible .pin {
+  box-shadow: 0 0 0 3px var(--blaze);
+}
+
+/* Faint crosshair on basemap following park-map cursor */
+.georef-crosshair {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px dashed rgba(242, 181, 49, 0.85);
+  pointer-events: none;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.georef-crosshair::before,
+.georef-crosshair::after {
+  content: '';
+  position: absolute;
+  background: rgba(242, 181, 49, 0.85);
+}
+
+.georef-crosshair::before {
+  top: -4px;
+  bottom: -4px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.georef-crosshair::after {
+  left: -4px;
+  right: -4px;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+/* Park-map matching indicator following basemap hover */
+.georef-park-map-indicator {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--blaze);
+  background: rgba(242, 181, 49, 0.25);
+  box-shadow: 0 0 10px rgba(242, 181, 49, 0.7);
+  pointer-events: none;
+  z-index: 1000;
+  box-sizing: border-box;
+  animation: matchPulse 1.2s infinite alternate ease-in-out;
+}
+
+@keyframes matchPulse {
+  from {
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+}
+
+/* Lane C: Overlay preview styles (card T-309) */
+.trailmaker-overlay-preview {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.trailmaker-overlay-empty-container {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.trailmaker-overlay-empty {
+  font: 500 16px/1.4 var(--sans);
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  padding: 24px 32px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  text-align: center;
+}
+
+.trailmaker-overlay-map-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.trailmaker-overlay-controls {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trailmaker-overlay-opacity-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 600 12px/1 var(--sans);
+  color: var(--ink);
+  user-select: none;
+}
+
+.trailmaker-overlay-opacity-control label {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.trailmaker-overlay-opacity-control input[type='range'] {
+  width: 110px;
+  cursor: pointer;
+  accent-color: var(--blaze);
+}
+
+.trailmaker-overlay-opacity-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+  color: var(--muted);
+}
+
+/* Center crosshair for keyboard pairing (card T-311, Acceptance 4) */
+.trailmaker-basemap-center-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 6;
+  border-radius: 50%;
+  border: 1.5px solid var(--blaze);
+  box-shadow: 0 0 0 1.5px rgba(23, 35, 28, 0.8), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.trailmaker-basemap-center-crosshair::before,
+.trailmaker-basemap-center-crosshair::after {
+  content: '';
+  position: absolute;
+  background: var(--blaze);
+  box-shadow: 0 0 2px rgba(23, 35, 28, 0.9);
+}
+
+.trailmaker-basemap-center-crosshair::before {
+  top: -5px;
+  bottom: -5px;
+  left: 50%;
+  width: 1.5px;
+  transform: translateX(-50%);
+}
+
+.trailmaker-basemap-center-crosshair::after {
+  left: -5px;
+  right: -5px;
+  top: 50%;
+  height: 1.5px;
+  transform: translateY(-50%);
+}
+
+/* Focus ring with at least 3:1 contrast on every focusable element (card T-311, Acceptance 2) */
+.trailmaker-basemap-container:focus-visible,
+.trailmaker-overlay-map-container:focus-visible {
+  outline: 2px solid var(--forest);
+  outline-offset: -2px;
+}
+
+.trailmaker-basemap-settings-btn:focus-visible,
+.trailmaker-basemap-close-btn:focus-visible,
+.trailmaker-basemap-error-banner button:focus-visible,
+.trailmaker-basemap-consent-actions .btn:focus-visible,
+.trailmaker-basemap-settings-actions .btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.trailmaker-basemap-input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-color: var(--ink);
+}
+
+.trailmaker-basemap-toggle-row input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.trailmaker-overlay-opacity-control input[type='range']:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.georef-marker:focus-visible {
+  outline: none;
+}
+
+.georef-marker:focus-visible .pin {
+  outline: 2px solid #ffffff;
+  box-shadow: 0 0 0 3px #17231c;
+}
+
+/* Screen-reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* GPX Import and Points List (card T-312) */
+.trailmaker-basemap-gpx-btn {
+  position: absolute;
+  top: 12px;
+  right: 56px;
+  z-index: 7;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--sans);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trailmaker-basemap-gpx-btn:hover {
+  background: var(--paper);
+}
+
+.trailmaker-basemap-gpx-btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.trailmaker-basemap-gpx-btn.has-gpx {
+  background: color-mix(in srgb, var(--blaze) 15%, var(--panel));
+  border-color: var(--blaze);
+  font-weight: 500;
+}
+
+.trailmaker-gpx-badge {
+  display: inline-block;
+  background: var(--blaze);
+  color: white;
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.trailmaker-gpx-list-drawer {
+  position: absolute;
+  top: 50px;
+  right: 12px;
+  width: min(340px, calc(100% - 24px));
+  max-height: calc(100% - 70px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.trailmaker-gpx-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trailmaker-gpx-list-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.trailmaker-gpx-list-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.trailmaker-gpx-list-filter-row {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trailmaker-gpx-list-notice {
+  font-size: 11px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--blaze) 10%, transparent);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trailmaker-gpx-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  max-height: 280px;
+}
+
+.trailmaker-gpx-list-item {
+  border-bottom: 1px solid var(--line);
+}
+
+.trailmaker-gpx-list-item:last-child {
+  border-bottom: none;
+}
+
+.trailmaker-gpx-point-btn {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.trailmaker-gpx-point-btn:hover {
+  background: var(--paper);
+}
+
+.trailmaker-gpx-point-btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.trailmaker-gpx-point-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trailmaker-gpx-point-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.trailmaker-gpx-kind-badge {
+  display: inline-block;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 600;
+  background: var(--line);
+  color: var(--muted);
+}
+
+.trailmaker-gpx-kind-badge.kind-wpt {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.trailmaker-gpx-kind-badge.kind-trkpt {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.trailmaker-gpx-kind-badge.kind-rtept {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.trailmaker-gpx-coords {
+  font-family: monospace;
+}
+
+.trailmaker-gpx-list-empty {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.trailmaker-gpx-list-more {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  border-top: 1px solid var(--line);
+}
+
+.trailmaker-gpx-list-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+}
+
+

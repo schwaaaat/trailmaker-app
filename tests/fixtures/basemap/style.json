@@ -1,0 +1,24 @@
+{
+  "version": 8,
+  "name": "Trailmaker offline fixture grid",
+  "center": [-78.395, 38.597],
+  "zoom": 14,
+  "sources": {
+    "fixture-grid": {
+      "type": "raster",
+      "tiles": ["/__test_basemap/tiles/{z}/{x}/{y}.png"],
+      "tileSize": 256,
+      "minzoom": 10,
+      "maxzoom": 16,
+      "bounds": [-78.41, 38.57, -78.35, 38.61],
+      "attribution": "Synthetic offline test grid"
+    }
+  },
+  "layers": [
+    {
+      "id": "fixture-grid",
+      "type": "raster",
+      "source": "fixture-grid"
+    }
+  ]
+}
