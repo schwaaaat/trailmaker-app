@@ -10,9 +10,13 @@ export const CACHE_NAME = 'trailmaker-v1';
 
 // Assets from Vite build manifest
 const manifestEntries = self.__WB_MANIFEST || [];
+const basePath = new URL('./', self.location.href).pathname;
+const scopedPath = (path: string) =>
+  path.startsWith(basePath) ? path : `${basePath}${path.replace(/^\/+/, '')}`;
+const indexPath = scopedPath('index.html');
 export const PRECACHE_URLS: string[] = manifestEntries
-  .map((entry) => (typeof entry === 'string' ? entry : entry.url))
-  .concat(['/', '/index.html', '/manifest.webmanifest', '/favicon.svg']);
+  .map((entry) => scopedPath(typeof entry === 'string' ? entry : entry.url))
+  .concat([basePath, indexPath, scopedPath('manifest.webmanifest'), scopedPath('favicon.svg')]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -26,15 +30,17 @@ self.addEventListener('install', (event) => {
         }
       }
       try {
-        const res = await fetch('/index.html');
+        const res = await fetch(indexPath);
         const html = await res.text();
-        const matches = html.matchAll(/(?:href|src)="(\/assets\/[^"]+)"/g);
+        const matches = html.matchAll(/(?:href|src)="([^"]+)"/g);
         const urls = Array.from(matches, (m) => m[1]).filter(
-          (u): u is string => typeof u === 'string' && u.length > 0
+          (url): url is string =>
+            typeof url === 'string' &&
+            new URL(url, self.location.origin).pathname.startsWith(`${basePath}assets/`),
         );
         for (const u of urls) {
           try {
-            await cache.add(new Request(u, { cache: 'reload' }));
+            await cache.add(new Request(new URL(u, self.location.origin), { cache: 'reload' }));
           } catch {
             // Ignore individual asset failure
           }
@@ -42,7 +48,7 @@ self.addEventListener('install', (event) => {
       } catch {
         // Ignore discovery failure
       }
-    })()
+    })(),
   );
 });
 
@@ -50,11 +56,9 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      );
+      await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
       await self.clients.claim();
-    })()
+    })(),
   );
 });
 
@@ -79,11 +83,11 @@ self.addEventListener('fetch', (event) => {
       // Match cache
       let match = await cache.match(event.request, { ignoreVary: true });
 
-      // For document navigation, fall back to /index.html or /
+      // For document navigation, fall back to the app's base-scoped index.
       if (!match && event.request.mode === 'navigate') {
         match =
-          (await cache.match('/index.html', { ignoreVary: true })) ||
-          (await cache.match('/', { ignoreVary: true }));
+          (await cache.match(indexPath, { ignoreVary: true })) ||
+          (await cache.match(basePath, { ignoreVary: true }));
       }
 
       if (match) {
@@ -102,14 +106,14 @@ self.addEventListener('fetch', (event) => {
       } catch (err) {
         if (event.request.mode === 'navigate') {
           const fallback =
-            (await cache.match('/index.html', { ignoreVary: true })) ||
-            (await cache.match('/', { ignoreVary: true }));
+            (await cache.match(indexPath, { ignoreVary: true })) ||
+            (await cache.match(basePath, { ignoreVary: true }));
           if (fallback) {
             return injectIsolationHeaders(fallback);
           }
         }
         throw err;
       }
-    })()
+    })(),
   );
 });

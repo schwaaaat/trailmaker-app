@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Feature, Project, Px } from '../../core/types';
 import { sessionBridge } from '../../state/bridge';
 import { makeProject, makeSession } from '../../state/fixtures.test.helper';
@@ -7,6 +7,7 @@ import {
   openSession,
   redo,
   selectFeature,
+  setJoinArmed,
   setKeyboardMode,
   setTool,
   undo,
@@ -50,6 +51,15 @@ const proj = () => st().session!.project;
 /** Canvas-local screen point of an image pixel under the current view. */
 const scr = (p: Px) => toScr(ed.view, p) as [number, number];
 const click = (p: Px) => tap(canvas, scr(p));
+
+function touchDragBecomesPinch(at: Px): void {
+  const [x, y] = scr(at);
+  ptr(canvas, 'pointerdown', x, y, { id: 1, pointerType: 'touch' });
+  ptr(canvas, 'pointermove', x + 24, y + 2, { id: 1, pointerType: 'touch' });
+  ptr(canvas, 'pointerdown', x + 120, y + 2, { id: 2, pointerType: 'touch' });
+  ptr(canvas, 'pointerup', x + 24, y + 2, { id: 1, pointerType: 'touch' });
+  ptr(canvas, 'pointerup', x + 120, y + 2, { id: 2, pointerType: 'touch' });
+}
 
 function open(p: Project) {
   openSession(makeSession(p));
@@ -109,6 +119,41 @@ describe('anchor tool', () => {
     undo();
     undo();
     expect(proj()).toStrictEqual(afterAdd);
+  });
+
+  it('restores a pin and the exact undo/redo state when its touch drag becomes a pinch', () => {
+    chooseTool('anchor');
+    click([500, 400]);
+    click([600, 500]);
+    undo(); // leave a redo entry while retaining the first pin
+    setTool('select');
+    const before = proj();
+    const historyBefore = st().history;
+
+    touchDragBecomesPinch([500, 400]);
+
+    expect(proj()).toStrictEqual(before);
+    expect(st().history).toStrictEqual(historyBefore);
+    expect(st().anchorDragging).toBe(false);
+    redo();
+    expect(proj().anchors).toHaveLength(2);
+    undo();
+    expect(proj()).toStrictEqual(before);
+  });
+
+  it('keeps a one-finger touch drag as a normal single undo step', () => {
+    chooseTool('anchor');
+    click([500, 400]);
+    const before = proj();
+    const [x, y] = scr([500, 400]);
+    ptr(canvas, 'pointerdown', x, y, { id: 1, pointerType: 'touch' });
+    ptr(canvas, 'pointermove', x + 30, y + 10, { id: 1, pointerType: 'touch' });
+    ptr(canvas, 'pointerup', x + 30, y + 10, { id: 1, pointerType: 'touch' });
+
+    expect(proj().anchors[0]!.px).not.toStrictEqual(before.anchors[0]!.px);
+    expect(st().history.undoLabel).toBe('Move anchor');
+    undo();
+    expect(proj()).toStrictEqual(before);
   });
 });
 
@@ -394,6 +439,35 @@ describe('select tool', () => {
     expect(proj()).toStrictEqual(before);
   });
 
+  it.each([
+    ['trail', trail],
+    [
+      'area',
+      {
+        kind: 'area',
+        id: 'area1',
+        name: 'Meadow',
+        color: '#D9480F',
+        notes: '',
+        pts: [
+          [100, 100],
+          [300, 100],
+          [300, 300],
+        ],
+      },
+    ],
+  ] as const)('restores a %s vertex drag when a second touch starts a pinch', (_kind, feature) => {
+    open(makeProject({ features: [feature] }));
+    selectFeature(feature.id);
+    const before = proj();
+    const historyBefore = st().history;
+
+    touchDragBecomesPinch([300, 100]);
+
+    expect(proj()).toStrictEqual(before);
+    expect(st().history).toStrictEqual(historyBefore);
+  });
+
   it('right-click on a vertex opens the menu (T-209): endpoints cannot split, interior vertices can', () => {
     selectFeature('f1');
     ptr(canvas, 'contextmenu', ...scr([300, 300]), { button: 2 }); // index 2, an endpoint
@@ -481,6 +555,30 @@ describe('split and join (T-209)', () => {
     ptr(canvas, 'pointerup', ...scr([550, 500]), { shiftKey: true });
     expect(st().secondSelectedFeatureId).toBe('f2');
     key('j');
+    expect(proj().features.map((f) => f.id)).toStrictEqual(['f1']);
+    expect(proj().features[0]!.name).toBe('Ridge');
+  });
+
+  it('long-pressing a selected vertex opens the right-click vertex menu', () => {
+    vi.useFakeTimers();
+    try {
+      selectFeature('f1');
+      ptr(canvas, 'pointerdown', ...scr([300, 100]), { pointerType: 'touch' });
+      vi.advanceTimersByTime(500);
+      expect(st().vertexMenu).toMatchObject({ featureId: 'f1', index: 1, canSplit: true });
+      ptr(canvas, 'pointerup', ...scr([300, 100]), { pointerType: 'touch' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('joins the next tapped trail after touch join mode is armed', () => {
+    open(makeProject({ features: [trail, trail2], seq: 10 }));
+    selectFeature('f1');
+    setJoinArmed(true);
+    ptr(canvas, 'pointerdown', ...scr([550, 500]));
+    ptr(canvas, 'pointerup', ...scr([550, 500]));
+    expect(st().joinArmed).toBe(false);
     expect(proj().features.map((f) => f.id)).toStrictEqual(['f1']);
     expect(proj().features[0]!.name).toBe('Ridge');
   });
@@ -591,6 +689,11 @@ describe('keyboard', () => {
     ['t', {}, {}, { tool: 'trail' }],
     ['p', {}, {}, { tool: 'point' }],
     ['r', {}, {}, { tool: 'area' }],
+    ['c', {}, {}, { tool: 'connect' }],
+    ['Enter', {}, { tool: 'connect', hasVertexFocus: true }, 'connectFocusedPoint'],
+    ['Escape', {}, { tool: 'connect' }, 'cancelConnect'],
+    ['Escape', { targetTag: 'BUTTON' }, { tool: 'connect' }, 'cancelConnect'],
+    ['Escape', {}, { tool: 'select', hasConnectSession: true }, 'cancelConnect'],
     ['f', {}, {}, 'fit'],
     ['+', {}, {}, 'zoomIn'],
     ['=', {}, {}, 'zoomIn'],
@@ -637,6 +740,13 @@ describe('keyboard', () => {
     ['Tab', {}, { canFocusVertices: false }, null],
     ['Tab', {}, { tool: 'trail', canFocusVertices: true }, null],
     ['Tab', { targetIsCanvas: false }, { canFocusVertices: true }, null],
+    [',', {}, { canFocusVertices: true }, 'stepFocusPrevVertex'],
+    ['.', {}, { canFocusVertices: true }, 'stepFocusNextVertex'],
+    ['<', {}, { canFocusVertices: true }, 'stepFocusPrevVertex10'],
+    ['>', {}, { canFocusVertices: true }, 'stepFocusNextVertex10'],
+    ['[', {}, { canFocusVertices: true }, 'stepFocusPrevVertex10'],
+    [']', {}, { canFocusVertices: true }, 'stepFocusNextVertex10'],
+    [',', { targetIsCanvas: false }, { canFocusVertices: true }, null],
     ['ArrowUp', {}, { hasVertexFocus: true }, 'nudgeUp'],
     ['ArrowDown', {}, { hasVertexFocus: true }, 'nudgeDown'],
     ['ArrowLeft', {}, { hasVertexFocus: true }, 'nudgeLeft'],
@@ -675,10 +785,26 @@ describe('tip line', () => {
       tipFor({ hasMap: true, tool: 'select', smartFollow: false, reviewing: false, ...c });
     expect(t({ hasMap: false })).toBe('');
     expect(t({})).toBe(TIPS.select);
+    expect(TIPS.select).toBe(
+      'Tap a point on the trail to select it (or press , / . to move between points). Then press S or pick Split here in the point’s menu. Right-click or long-press a point for its menu.',
+    );
     expect(t({ reviewing: true })).toBe(TIPS.cands);
     expect(t({ tool: 'anchor' })).toBe(TIPS.anchor);
     expect(t({ tool: 'trail' })).toBe(TIPS.trail);
     expect(t({ tool: 'trail', smartFollow: true })).toBe(TIPS.trailSmart);
     expect(t({ tool: 'area', reviewing: true })).toBe(TIPS.area);
+  });
+
+  it('uses touch instructions for a coarse pointer without changing desktop text', () => {
+    const t = (c: Partial<Parameters<typeof tipFor>[0]>) =>
+      tipFor({ hasMap: true, tool: 'select', smartFollow: false, reviewing: false, ...c });
+    expect(t({})).toBe(TIPS.select);
+    expect(t({ coarsePointer: true })).toBe(
+      'Select trail. Tap a point or use , / .; press S or Split here. Long-press for its menu.',
+    );
+    expect(t({ coarsePointer: true, reviewing: true })).not.toMatch(
+      /right-click|shift-click|scroll to zoom/i,
+    );
+    expect(t({ coarsePointer: true, tool: 'trail', smartFollow: true })).toMatch(/^Tap /);
   });
 });

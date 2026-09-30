@@ -10,7 +10,16 @@ import {
   updateGeocoderSettings,
 } from '../../io/settings';
 import { clearActiveGpx, setActiveGpx } from '../../io/gpxStorage';
-import { appStore, edit, openSession, redo, selectAnchor, setTool, undo } from '../../state/store';
+import {
+  appStore,
+  edit,
+  openSession,
+  redo,
+  requestSatelliteCapture,
+  selectAnchor,
+  setTool,
+  undo,
+} from '../../state/store';
 import { addAnchor } from '../../state/commands';
 import { BasemapPane } from './BasemapPane';
 import * as loader from './loader';
@@ -60,6 +69,7 @@ describe('BasemapPane', () => {
     listeners: Record<string, ((...args: unknown[]) => void)[]>;
     on(event: string, handler: (...args: unknown[]) => void): unknown;
     setLngLat(coords: [number, number]): unknown;
+    setDraggable(draggable: boolean): unknown;
     getLngLat(): { lng: number; lat: number };
     addTo(map: unknown): unknown;
     remove(): unknown;
@@ -75,6 +85,11 @@ describe('BasemapPane', () => {
       this.element = options?.element ?? document.createElement('div');
       this.draggable = options?.draggable ?? false;
       createdMarkers.push(this);
+    }
+
+    setDraggable(draggable: boolean) {
+      this.draggable = draggable;
+      return this;
     }
 
     setLngLat(coords: [number, number]) {
@@ -510,13 +525,15 @@ describe('BasemapPane', () => {
 
     expect(createdMarkers).toHaveLength(1);
     const m = createdMarkers[0]!;
-    expect(m.draggable).toBe(true);
+    // T-317: unselected anchor is not draggable initially
+    expect(m.draggable).toBe(false);
 
-    // Clicking marker selects it
+    // Clicking marker selects it and makes it draggable
     act(() => {
       m.element.click();
     });
     expect(appStore.getState().selectedAnchorId).toBe('g0');
+    expect(m.draggable).toBe(true);
 
     // Drag marker
     act(() => {
@@ -738,5 +755,84 @@ describe('BasemapPane', () => {
     const paired = appStore.getState().session!.project.anchors[0]!;
     expect(paired.ll).toEqual([38.55, -78.35]);
     expect(paired.source).toBe('basemap');
+  });
+
+  it('switches between vector and satellite basemap via ImagerySwitch (card T-316)', async () => {
+    updateBasemapSettings({ enabled: true, imagery: 'vector', satelliteProvider: 'usgs' });
+    render(<BasemapPane />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const satBtn = Array.from(container.querySelectorAll('.trailmaker-imagery-btn')).find(
+      (b) => b.textContent?.trim() === 'Satellite',
+    ) as HTMLButtonElement | undefined;
+    expect(satBtn).toBeDefined();
+
+    await act(async () => {
+      satBtn?.click();
+      await Promise.resolve();
+    });
+
+    expect(mockMap.setStyle).toHaveBeenCalled();
+    const styleArg = mockMap.setStyle.mock.calls.at(-1)?.[0] as {
+      sources: Record<string, { tiles: string[] }>;
+    };
+    expect(typeof styleArg).toBe('object');
+    expect(styleArg.sources['satellite-raster-source']?.tiles[0]).toContain('USGSImageryOnly');
+
+    const mapBtn = Array.from(container.querySelectorAll('.trailmaker-imagery-btn')).find(
+      (b) => b.textContent?.trim() === 'Map',
+    ) as HTMLButtonElement | undefined;
+    expect(mapBtn).toBeDefined();
+
+    await act(async () => {
+      mapBtn?.click();
+      await Promise.resolve();
+    });
+    const vectorStyleArg = mockMap.setStyle.mock.calls.at(-1)?.[0];
+    expect(typeof vectorStyleArg).toBe('string');
+  });
+
+  it('opens framing overlay when "Use this view as my map" is clicked (card T-318)', async () => {
+    updateBasemapSettings({ enabled: true, imagery: 'vector' });
+    render(<BasemapPane />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const captureBtn = container.querySelector('.trailmaker-basemap-capture-btn') as HTMLButtonElement;
+    expect(captureBtn).not.toBeNull();
+    expect(captureBtn.textContent).toBe('Use this view as my map');
+
+    await act(async () => {
+      captureBtn.click();
+      await Promise.resolve();
+    });
+
+    // Framing overlay should be open
+    expect(container.querySelector('.trailmaker-satellite-framing-overlay')).not.toBeNull();
+  });
+
+  it('opens framing overlay when satelliteCaptureRequested is set in appStore, then clears it (card T-318)', async () => {
+    updateBasemapSettings({ enabled: true, imagery: 'vector' });
+    render(<BasemapPane />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.trailmaker-satellite-framing-overlay')).toBeNull();
+
+    await act(async () => {
+      requestSatelliteCapture();
+      await Promise.resolve();
+    });
+
+    // Framing overlay should be open and store flag cleared
+    expect(container.querySelector('.trailmaker-satellite-framing-overlay')).not.toBeNull();
+    expect(appStore.getState().satelliteCaptureRequested).toBe(false);
   });
 });

@@ -1,10 +1,14 @@
 /** @jsxRuntime automatic */
 // Lane B. Map toolbar and tip line over the editor stage (prototype #toolbar / #tip).
 import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
+import { TOUCH_HINT_STORAGE_KEY } from '../../io/settings';
 import { useApp } from '../../state/hooks';
 import { setHelpOpen, type Tool } from '../../state/store';
 import { currentEditor } from './EditorStage';
 import { chooseTool, redoAction, tipFor, undoAction } from './tools';
+
+export { TOUCH_HINT_STORAGE_KEY };
 
 const ICONS: Readonly<Record<string, ReactNode>> = {
   select: <path d="M5 3l14 8-6 2-3 6z" strokeLinejoin="round" />,
@@ -23,6 +27,13 @@ const ICONS: Readonly<Record<string, ReactNode>> = {
   ),
   point: <path d="M6 21V4h11l-2 4 2 4H6" strokeLinejoin="round" />,
   area: <path d="M4 7l7-4 9 5-2 11-11 2z" strokeLinejoin="round" />,
+  connect: (
+    <>
+      <path d="M6 7l12 10" />
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="19" cy="18" r="2" />
+    </>
+  ),
   fit: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" strokeLinecap="round" />,
   undo: (
     <>
@@ -64,6 +75,7 @@ export const TOOLS: readonly { tool: Tool; label: string; title: string; key: st
   { tool: 'trail', label: 'Trail', title: 'Trace a trail', key: 'T' },
   { tool: 'point', label: 'Point', title: 'Add a point of interest', key: 'P' },
   { tool: 'area', label: 'Area', title: 'Outline an area', key: 'R' },
+  { tool: 'connect', label: 'Connect', title: 'Connect two points on trails', key: 'C' },
 ];
 
 export function Toolbar() {
@@ -145,18 +157,82 @@ export function Toolbar() {
   );
 }
 
+const hintSubscribers = new Set<(collapsed: boolean) => void>();
+
+export function subscribeTouchHintCollapsed(callback: (collapsed: boolean) => void): () => void {
+  hintSubscribers.add(callback);
+  return () => {
+    hintSubscribers.delete(callback);
+  };
+}
+
+export function resetTouchHintCollapsed(): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(TOUCH_HINT_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  for (const sub of hintSubscribers) {
+    try {
+      sub(false);
+    } catch {
+      // Ignore subscriber errors
+    }
+  }
+}
+
 export function TipLine() {
-  const text = useApp((s) =>
-    tipFor({
-      hasMap: s.session !== null,
-      tool: s.tool,
-      smartFollow: s.session?.project.trace.smartFollow ?? false,
-      reviewing: s.candidates !== null,
-    }),
-  );
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(TOUCH_HINT_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => subscribeTouchHintCollapsed(setCollapsed), []);
+  const hasMap = useApp((s) => s.session !== null);
+  const tool = useApp((s) => s.tool);
+  const smartFollow = useApp((s) => s.session?.project.trace.smartFollow ?? false);
+  const reviewing = useApp((s) => s.candidates !== null);
+  const state = { hasMap, tool, smartFollow, reviewing };
+  const text = tipFor({ ...state, coarsePointer });
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(pointer: coarse)');
+    const update = () => setCoarsePointer(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  const toggleCollapsed = () => {
+    setCollapsed((previous) => {
+      const next = !previous;
+      try {
+        window.localStorage.setItem(TOUCH_HINT_STORAGE_KEY, String(next));
+      } catch {
+        // The hint remains usable when storage is unavailable; remembering is best effort.
+      }
+      return next;
+    });
+  };
   return (
-    <div className="tip" aria-live="polite">
-      {text}
+    <div className={`tip${coarsePointer ? ' touch-tip' : ''}`} aria-live="polite">
+      {coarsePointer && (
+        <button
+          type="button"
+          className="tip-toggle"
+          aria-label={collapsed ? 'Show map hint' : 'Collapse map hint'}
+          aria-expanded={!collapsed}
+          onClick={toggleCollapsed}
+        >
+          {collapsed ? '?' : '×'}
+        </button>
+      )}
+      {(!coarsePointer || !collapsed) && <span className="tip-text">{text}</span>}
     </div>
   );
 }

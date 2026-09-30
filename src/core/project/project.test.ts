@@ -81,7 +81,10 @@ describe('newProject', () => {
 
 describe('serializeProject & deserializeProject round-trip', () => {
   test('round-trips project and original image data exactly', () => {
-    const img = createSampleMapImage();
+    const img = createSampleMapImage({
+      attribution: 'Imagery: USDA NAIP via USGS The National Map',
+      acquisitionYear: 2024,
+    });
     const proj: Project = {
       version: PROJECT_VERSION,
       name: 'Full Round Trip',
@@ -403,6 +406,13 @@ describe('validateProject structural checks', () => {
     expect(() =>
       validateProject({ ...validMapImageProject(), image: { ...createSampleMapImage(), sha256: '' } })
     ).toThrow('image.sha256 must be a non-empty string');
+
+    expect(() =>
+      validateProject({ ...validBase(), image: { ...createSampleMapImage(), attribution: '' } })
+    ).toThrow('image.attribution must be a non-empty string when present');
+    expect(() =>
+      validateProject({ ...validBase(), image: { ...createSampleMapImage(), acquisitionYear: 2024.5 } })
+    ).toThrow('image.acquisitionYear must be a positive integer when present');
 
     expect(() =>
       validateProject({
@@ -1234,4 +1244,3 @@ describe('additional structural validation edge cases', () => {
     ).toThrow('autoTrace.minLengthPct must be a non-negative number');
   });
 });
-

@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Anchor, Project } from '../../core/types';
-import type { AppState } from '../../state/store';
+import { appStore, type AppState } from '../../state/store';
 import {
   getPairingState,
   handleBasemapClick,
   handleCancelPairing,
+  initPairingPhoneSync,
+  isNarrowPhone,
   PAIRING_PROMPT,
+  stopPairingPhoneSync,
 } from './pairing';
 
 import { newProject } from '../../core/project';
@@ -233,5 +236,301 @@ describe('pairing state machine', () => {
       expect(result.confirmed).toBe(false);
     }
     expect(editMock).not.toHaveBeenCalled();
+  });
+
+  describe('phone pairing tab switch (T-315 acceptance 2)', () => {
+    it('detects narrow phone layout when viewport <= 820px', () => {
+      const origMatchMedia = window.matchMedia;
+      const origInnerWidth = window.innerWidth;
+
+      try {
+        // Mock matching narrow query
+        window.matchMedia = vi.fn().mockImplementation((q: string) => ({
+          matches: q.includes('820px'),
+          media: q,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })) as unknown as typeof window.matchMedia;
+
+        expect(isNarrowPhone()).toBe(true);
+
+        // Mock desktop query
+        window.matchMedia = vi.fn().mockImplementation(() => ({
+          matches: false,
+          media: '',
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })) as unknown as typeof window.matchMedia;
+        Object.defineProperty(window, 'innerWidth', { value: 1200, writable: true });
+
+        expect(isNarrowPhone()).toBe(false);
+      } finally {
+        window.matchMedia = origMatchMedia;
+        Object.defineProperty(window, 'innerWidth', { value: origInnerWidth, writable: true });
+      }
+    });
+
+    it('switches to basemap tab when spot tapped on park map on a phone', () => {
+      const origMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation((q: string) => ({
+        matches: q.includes('820px'),
+        media: q,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+
+      stopPairingPhoneSync();
+
+      const listeners: Array<(state: AppState) => void> = [];
+      let currentState = makeState({ tool: 'anchor' });
+      const setStageViewMock = vi.fn();
+
+      const mockStore = {
+        getState: () => ({ ...currentState, setStageView: setStageViewMock }),
+        setState: vi.fn(),
+        subscribe: (cb: (state: AppState) => void) => {
+          listeners.push(cb);
+          return () => {
+            const idx = listeners.indexOf(cb);
+            if (idx >= 0) listeners.splice(idx, 1);
+          };
+        },
+      };
+
+      try {
+        const cleanup = initPairingPhoneSync(mockStore as never);
+
+        // State changes to pending anchor (spot tapped on park map)
+        const pendingAnchor: Anchor = { id: 'g0', px: [100, 200], ll: null, source: 'paste' };
+        const project = makeProject([pendingAnchor]);
+        currentState = makeState({
+          session: { project, map: {} as never },
+          tool: 'anchor',
+          selectedAnchorId: 'g0',
+        });
+
+        // Trigger store subscribers
+        listeners.forEach((l) => l(currentState));
+
+        expect(setStageViewMock).toHaveBeenCalledWith('basemap');
+
+        cleanup();
+      } finally {
+        window.matchMedia = origMatchMedia;
+        stopPairingPhoneSync();
+      }
+    });
+
+    it('does NOT switch tabs on desktop when spot tapped on park map', () => {
+      const origMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: '',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+      Object.defineProperty(window, 'innerWidth', { value: 1200, writable: true });
+
+      stopPairingPhoneSync();
+
+      const listeners: Array<(state: AppState) => void> = [];
+      let currentState = makeState({ tool: 'anchor' });
+      const setStageViewMock = vi.fn();
+
+      const mockStore = {
+        getState: () => ({ ...currentState, setStageView: setStageViewMock }),
+        setState: vi.fn(),
+        subscribe: (cb: (state: AppState) => void) => {
+          listeners.push(cb);
+          return () => {
+            const idx = listeners.indexOf(cb);
+            if (idx >= 0) listeners.splice(idx, 1);
+          };
+        },
+      };
+
+      try {
+        const cleanup = initPairingPhoneSync(mockStore as never);
+
+        const pendingAnchor: Anchor = { id: 'g0', px: [100, 200], ll: null, source: 'paste' };
+        const project = makeProject([pendingAnchor]);
+        currentState = makeState({
+          session: { project, map: {} as never },
+          tool: 'anchor',
+          selectedAnchorId: 'g0',
+        });
+
+        listeners.forEach((l) => l(currentState));
+
+        expect(setStageViewMock).not.toHaveBeenCalled();
+
+        cleanup();
+      } finally {
+        window.matchMedia = origMatchMedia;
+        stopPairingPhoneSync();
+      }
+    });
+
+    it('returns to map tab after basemap tap completes the pair on a phone', () => {
+      const origMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation((q: string) => ({
+        matches: q.includes('820px'),
+        media: q,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+
+      const setStageViewMock = vi.fn();
+      // Mock store's setStageView
+      const appStoreAny = appStore as unknown as {
+        getState: () => { setStageView?: (v: string) => void };
+      };
+      const origStoreGetState = appStoreAny.getState;
+      appStoreAny.getState = () => ({
+        ...origStoreGetState(),
+        setStageView: setStageViewMock,
+      });
+
+      try {
+        const a1: Anchor = { id: 'g0', px: [100, 200], ll: null, source: 'paste' };
+        const p = makeProject([a1]);
+        const s = makeState({
+          session: { project: p, map: {} as never },
+          tool: 'anchor',
+          selectedAnchorId: 'g0',
+        });
+
+        const editMock = vi.fn();
+        const result = handleBasemapClick([38.5, -78.4], {
+          project: p,
+          state: s,
+          edit: editMock,
+        });
+
+        expect(result.action).toBe('set');
+        expect(setStageViewMock).toHaveBeenCalledWith('map');
+      } finally {
+        window.matchMedia = origMatchMedia;
+        appStoreAny.getState = origStoreGetState;
+      }
+    });
+
+    it('does NOT switch to map tab on desktop after basemap tap completes the pair', () => {
+      const origMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: '',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+      Object.defineProperty(window, 'innerWidth', { value: 1200, writable: true });
+
+      const setStageViewMock = vi.fn();
+      const appStoreAny = appStore as unknown as {
+        getState: () => { setStageView?: (v: string) => void };
+      };
+      const origStoreGetState = appStoreAny.getState;
+      appStoreAny.getState = () => ({
+        ...origStoreGetState(),
+        setStageView: setStageViewMock,
+      });
+
+      try {
+        const a1: Anchor = { id: 'g0', px: [100, 200], ll: null, source: 'paste' };
+        const p = makeProject([a1]);
+        const s = makeState({
+          session: { project: p, map: {} as never },
+          tool: 'anchor',
+          selectedAnchorId: 'g0',
+        });
+
+        const editMock = vi.fn();
+        const result = handleBasemapClick([38.5, -78.4], {
+          project: p,
+          state: s,
+          edit: editMock,
+        });
+
+        expect(result.action).toBe('set');
+        expect(setStageViewMock).not.toHaveBeenCalled();
+      } finally {
+        window.matchMedia = origMatchMedia;
+        appStoreAny.getState = origStoreGetState;
+      }
+    });
+
+    it('returns to map tab on phone when pending pairing is cancelled', () => {
+      const origMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation((q: string) => ({
+        matches: q.includes('820px'),
+        media: q,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })) as unknown as typeof window.matchMedia;
+
+      const setStageViewMock = vi.fn();
+      const appStoreAny = appStore as unknown as {
+        getState: () => { setStageView?: (v: string) => void };
+      };
+      const origStoreGetState = appStoreAny.getState;
+      appStoreAny.getState = () => ({
+        ...origStoreGetState(),
+        setStageView: setStageViewMock,
+      });
+
+      try {
+        const a1: Anchor = { id: 'g0', px: [100, 200], ll: null, source: 'paste' };
+        const p = makeProject([a1]);
+        const s = makeState({
+          session: { project: p, map: {} as never },
+          tool: 'anchor',
+          selectedAnchorId: 'g0',
+        });
+
+        const editMock = vi.fn();
+        const selectMock = vi.fn();
+
+        const result = handleCancelPairing({
+          project: p,
+          state: s,
+          edit: editMock,
+          selectAnchor: selectMock,
+        });
+
+        expect(result.action).toBe('cancel');
+        expect(setStageViewMock).toHaveBeenCalledWith('map');
+      } finally {
+        window.matchMedia = origMatchMedia;
+        appStoreAny.getState = origStoreGetState;
+      }
+    });
   });
 });

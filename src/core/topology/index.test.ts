@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Area, Feature, Poi, Px, SnapOptions, TopologyEdit, Trail } from '../types';
-import { hasUnsnappedEnds, joinTrails, snapTrailEnds, splitTrail } from './index';
+import { connectTrailPoints, hasUnsnappedEnds, joinTrails, snapTrailEnds, splitTrail } from './index';
 
 const trail = (id: string, pts: Trail['pts'], extra: Partial<Trail> = {}): Trail => ({
   id,
@@ -11,6 +11,35 @@ const trail = (id: string, pts: Trail['pts'], extra: Partial<Trail> = {}): Trail
   ink: [1, 2, 3],
   pts,
   ...extra,
+});
+
+describe('connectTrailPoints', () => {
+  it('inserts exact mid-segment junctions and preserves both trails', () => {
+    const a = trail('a', [[0, 0], [10, 0]]);
+    const b = trail('b', [[5, 5], [5, -5]]);
+    const connector = trail('c', [[99, 99], [100, 100]]);
+    const result = connectTrailPoints([a, b],
+      { trailId: 'a', segmentIndex: 0, point: [5, 0] },
+      { trailId: 'b', segmentIndex: 0, point: [5, 0] }, connector);
+    expect(result.updated.map((t) => t.kind === 'trail' ? t.pts : null)).toEqual([[[0, 0], [5, 0], [10, 0]], [[5, 5], [5, 0], [5, -5]], [[5, 0], [5, 0]]]);
+  });
+
+  it('reuses a shared junction coordinate for three- and four-way joins', () => {
+    const at = [5, 0] as Px;
+    const trails = [
+      trail('a', [[0, 0], [10, 0]]), trail('b', [[5, 5], [5, -5]]),
+      trail('c', [[0, 5], [10, -5]]), trail('d', [[0, -5], [10, 5]]),
+    ];
+    const first = connectTrailPoints(trails.slice(0, 2),
+      { trailId: 'a', segmentIndex: 0, point: at },
+      { trailId: 'b', segmentIndex: 0, point: at }, trail('x', [at, [6, 0]]));
+    const second = connectTrailPoints([...trails, ...first.updated],
+      { trailId: 'c', segmentIndex: 0, point: at },
+      { trailId: 'd', segmentIndex: 0, point: at }, trail('y', [at, [6, 0]]));
+    const merged = new Map([...trails, ...first.updated, ...second.updated].map((f) => [f.id, f]));
+    expect([...merged.values()].filter((f) => f.kind === 'trail').every((f) => f.pts.includes(at))).toBe(true);
+    expect([...merged.values()].filter((f) => f.kind === 'trail' && f.pts.includes(at))).toHaveLength(6);
+  });
 });
 const poi: Poi = {
   id: 'poi', kind: 'poi', name: 'POI', color: '#123456', notes: '',

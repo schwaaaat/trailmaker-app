@@ -22,11 +22,21 @@ import {
 } from '../../io/settings';
 import { setAnchorCoords } from '../../state/commands';
 import { useApp, useFit } from '../../state/hooks';
-import { appStore, edit, sealHistory, selectAnchor, setAnchorDragging } from '../../state/store';
+import {
+  appStore,
+  clearSatelliteCaptureRequest,
+  edit,
+  sealHistory,
+  selectAnchor,
+  setAnchorDragging,
+} from '../../state/store';
 import { onEditor } from '../editor/EditorStage';
 import { BasemapConsent } from './BasemapConsent';
 import { BasemapSettingsPopover } from './BasemapSettingsPopover';
 import { GeoSearchBox } from './GeoSearchBox';
+import { ImagerySwitch } from './ImagerySwitch';
+import { SatelliteFramingOverlay } from './SatelliteFramingOverlay';
+import { getEffectiveStyle, getSatelliteHost } from './satellite';
 import {
   clearActiveGpx,
   getActiveGpx,
@@ -49,12 +59,22 @@ import type { BasemapHandle, BasemapPaneProps } from './types';
 import './georef.css';
 
 const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneProps> = (
-  { className = '', style, handleRef, onMapClick, overrideStyleUrl, confirm, children },
+  {
+    className = '',
+    style,
+    handleRef,
+    onMapClick,
+    overrideStyleUrl,
+    confirm,
+    onResetInterface,
+    children,
+  },
   forwardedRef,
 ) => {
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [isDismissed, setIsDismissed] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFramingOpen, setIsFramingOpen] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [hoverPx, setHoverPx] = useState<Px | null>(null);
@@ -67,6 +87,7 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
 
   const appState = useApp((s) => s);
   const pairing = getPairingState(appState);
+  const satelliteCaptureRequested = useApp((s) => s.satelliteCaptureRequested);
 
   const fit = useFit();
   const project = appState.session?.project;
@@ -101,6 +122,9 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
   useEffect(() => {
     return subscribeSettings((newSettings) => {
       setSettings(newSettings);
+      if (!newSettings.basemap.enabled) {
+        setIsDismissed(false);
+      }
     });
   }, []);
 
@@ -110,6 +134,27 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
       setGpxLayer(newLayer);
     });
   }, []);
+
+  const handleStartFraming = useCallback(() => {
+    const current = loadSettings();
+    if (!current.basemap.enabled) {
+      setIsDismissed(false);
+      return;
+    }
+    if (current.basemap.imagery !== 'satellite') {
+      updateBasemapSettings({ imagery: 'satellite' });
+    }
+    setSettings(current);
+    setIsFramingOpen(true);
+  }, []);
+
+  // When satellite capture is requested via store, open framing overlay and clear flag (T-318)
+  useEffect(() => {
+    if (satelliteCaptureRequested) {
+      handleStartFraming();
+      clearSatelliteCaptureRequest();
+    }
+  }, [satelliteCaptureRequested, handleStartFraming]);
 
   const syncGpxLayer = useCallback((map: MapLibreMap, layer: StoredGpxLayer | null) => {
     const sourceId = 'trailmaker-imported-gpx';
@@ -249,7 +294,11 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
     syncGpxLayer(mapInstanceRef.current, gpxLayer);
   }, [isReady, gpxLayer, syncGpxLayer]);
 
-  const effectiveStyleUrl = overrideStyleUrl || settings.basemap.styleUrl;
+  const effectiveStyle = React.useMemo(() => {
+    return getEffectiveStyle(settings.basemap, overrideStyleUrl);
+  }, [settings.basemap, overrideStyleUrl]);
+  const effectiveStyleRef = useRef(effectiveStyle);
+  effectiveStyleRef.current = effectiveStyle;
   const isEnabled = settings.basemap.enabled;
 
   // Imperative handle
@@ -273,23 +322,16 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
     [isReady],
   );
 
-  // Update map style if effectiveStyleUrl changes while map exists
-  useEffect(() => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.setStyle(effectiveStyleUrl);
-    }
-  }, [effectiveStyleUrl]);
-
   // Synchronize anchor markers with map
-  useEffect(() => {
+  const syncMarkers = useCallback(() => {
     if (!isReady || !mapInstanceRef.current || !maplibreModuleRef.current) return;
 
     markerManagerRef.current.sync({
       map: mapInstanceRef.current,
       maplibre: maplibreModuleRef.current,
-      anchors: anchors ?? [],
-      selectedAnchorId: appState.selectedAnchorId,
-      fit,
+      anchors: anchorsRef.current ?? [],
+      selectedAnchorId: appStore.getState().selectedAnchorId,
+      fit: fitRef.current,
       onSelectAnchor: (id) => selectAnchor(id),
       onMoveAnchor: (id, ll) => {
         const curProject = appStore.getState().session?.project;
@@ -307,7 +349,25 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         setAnchorDragging(false);
       },
     });
-  }, [isReady, anchors, appState.selectedAnchorId, fit]);
+  }, [isReady]);
+
+  // Update map style if effectiveStyle changes while map exists
+  useEffect(() => {
+    if (mapInstanceRef.current) {
+      const map = mapInstanceRef.current;
+      map.setStyle(effectiveStyle);
+      if (typeof map.once === 'function') {
+        map.once('style.load', () => {
+          if (gpxLayer) syncGpxLayer(map, gpxLayer);
+          syncMarkers();
+        });
+      }
+    }
+  }, [effectiveStyle, gpxLayer, syncGpxLayer, syncMarkers]);
+
+  useEffect(() => {
+    syncMarkers();
+  }, [syncMarkers, anchors, appState.selectedAnchorId, fit]);
 
   // Listen to Esc key to cancel pending pairing
   useEffect(() => {
@@ -392,10 +452,12 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         try {
           const map = new maplibre.Map({
             container: containerRef.current,
-            style: effectiveStyleUrl,
+            style: effectiveStyleRef.current,
             center: view.center ?? [0, 20],
             zoom: view.zoom ?? (view.bounds ? 10 : 1),
-            attributionControl: { compact: true },
+            attributionControl: {
+              compact: typeof window !== 'undefined' ? window.innerWidth <= 820 : true,
+            },
           });
 
           map.addControl(new maplibre.NavigationControl({ showCompass: true }), 'top-left');
@@ -480,7 +542,7 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         setHoverPx(null);
       }
     };
-  }, [isEnabled, effectiveStyleUrl]);
+  }, [isEnabled]);
 
   const isPending = pairing.status === 'pending';
 
@@ -629,6 +691,12 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         />
       )}
 
+      {isEnabled && settings.basemap.imagery === 'satellite' && settings.basemap.satelliteProvider === 'naip' && (
+        <div className="trailmaker-naip-coverage-status" role="status">
+          NAIP shown where available; USGS imagery fills areas with no NAIP.
+        </div>
+      )}
+
       {isPending && (
         <div
           className="trailmaker-georef-prompt-banner"
@@ -649,7 +717,8 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
 
       {!isEnabled && (
         <BasemapConsent
-          styleUrl={effectiveStyleUrl}
+          styleUrl={typeof effectiveStyle === 'string' ? effectiveStyle : settings.basemap.styleUrl}
+          satelliteHost={getSatelliteHost(settings.basemap.satelliteProvider)}
           geocoderUrl={settings.geocoder.serviceUrl}
           geocoderEnabled={settings.geocoder.enabled}
           onToggleGeocoder={(enabled) => updateGeocoderSettings({ enabled })}
@@ -719,31 +788,60 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         }}
       />
 
-      <button
-        type="button"
-        className={`trailmaker-basemap-gpx-btn ${gpxLayer ? 'has-gpx' : ''}`}
-        onClick={() => {
-          if (!gpxLayer) {
-            fileInputRef.current?.click();
-          } else {
-            setIsGpxListOpen(!isGpxListOpen);
+      <div className="trailmaker-basemap-top-actions">
+        <ImagerySwitch
+          imagery={settings.basemap.imagery ?? 'vector'}
+          onChange={(imagery) => updateBasemapSettings({ imagery })}
+        />
+
+        <button
+          type="button"
+          className="trailmaker-basemap-capture-btn"
+          onClick={handleStartFraming}
+          aria-label="Use this view as my map"
+          title="Use this view as my map"
+        >
+          Use this view as my map
+        </button>
+
+        <button
+          type="button"
+          className={`trailmaker-basemap-gpx-btn ${gpxLayer ? 'has-gpx' : ''}`}
+          onClick={() => {
+            if (!gpxLayer) {
+              fileInputRef.current?.click();
+            } else {
+              setIsGpxListOpen(!isGpxListOpen);
+            }
+          }}
+          aria-label={
+            gpxLayer ? `GPX points (${gpxLayer.points.length} points)` : 'Import GPX file'
           }
-        }}
-        aria-label={
-          gpxLayer ? `GPX points (${gpxLayer.points.length} points)` : 'Import GPX file'
-        }
-        aria-haspopup={gpxLayer ? 'dialog' : undefined}
-        aria-expanded={gpxLayer ? isGpxListOpen : undefined}
-        title={gpxLayer ? 'Toggle GPX points list' : 'Import GPX file'}
-      >
-        {gpxLayer ? (
-          <>
-            GPX points <span className="trailmaker-gpx-badge">{gpxLayer.points.length}</span>
-          </>
-        ) : (
-          'Import GPX'
-        )}
-      </button>
+          aria-haspopup={gpxLayer ? 'dialog' : undefined}
+          aria-expanded={gpxLayer ? isGpxListOpen : undefined}
+          title={gpxLayer ? 'Toggle GPX points list' : 'Import GPX file'}
+        >
+          {gpxLayer ? (
+            <>
+              GPX points <span className="trailmaker-gpx-badge">{gpxLayer.points.length}</span>
+            </>
+          ) : (
+            'Import GPX'
+          )}
+        </button>
+
+        <button
+          type="button"
+          className="trailmaker-basemap-settings-btn"
+          onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+          aria-label="Basemap settings"
+          aria-haspopup="dialog"
+          aria-expanded={isSettingsOpen}
+          title="Basemap settings"
+        >
+          ⚙
+        </button>
+      </div>
 
       {gpxLayer && (
         <GpxPointsList
@@ -776,18 +874,6 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         />
       )}
 
-      <button
-        type="button"
-        className="trailmaker-basemap-settings-btn"
-        onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-        aria-label="Basemap settings"
-        aria-haspopup="dialog"
-        aria-expanded={isSettingsOpen}
-        title="Basemap settings"
-      >
-        ⚙
-      </button>
-
       <BasemapSettingsPopover
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -806,6 +892,16 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         onResetStyleUrl={() => {
           resetBasemapStyleUrl();
         }}
+        onResetInterface={onResetInterface}
+        satelliteProvider={settings.basemap.satelliteProvider ?? 'naip'}
+        onChangeSatelliteProvider={(satelliteProvider) => {
+          updateBasemapSettings({ satelliteProvider });
+        }}
+        esriApiKey={settings.basemap.esriApiKey ?? ''}
+        onChangeEsriApiKey={(esriApiKey) => {
+          updateBasemapSettings({ esriApiKey });
+        }}
+        onStartFraming={handleStartFraming}
         geocoderUrl={settings.geocoder.serviceUrl}
         geocoderEnabled={settings.geocoder.enabled}
         onToggleGeocoder={(enabled) => updateGeocoderSettings({ enabled })}
@@ -813,6 +909,14 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         onResetGeocoderUrl={() => {
           resetGeocoderServiceUrl();
         }}
+      />
+
+      <SatelliteFramingOverlay
+        map={mapInstanceRef.current}
+        isOpen={isFramingOpen}
+        onClose={() => setIsFramingOpen(false)}
+        activeProvider={settings.basemap.satelliteProvider ?? 'naip'}
+        onSwitchProvider={(satelliteProvider) => updateBasemapSettings({ satelliteProvider })}
       />
 
       {children}

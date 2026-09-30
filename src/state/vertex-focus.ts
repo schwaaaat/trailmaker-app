@@ -34,6 +34,19 @@ export function stepVertexFocus(
   return { featureId: feature.id, index: next };
 }
 
+/** Move the visible point focus by one or ten vertices, clamping rather than leaving the canvas. */
+export function moveVertexFocus(
+  focus: VertexFocus | null,
+  feature: Feature | undefined,
+  dir: 1 | -1,
+  amount: 1 | 10 = 1,
+): VertexFocus | null {
+  const n = stepCount(feature);
+  if (!feature || n === 0) return null;
+  const at = focus && focus.featureId === feature.id ? focus.index : dir > 0 ? -1 : n;
+  return { featureId: feature.id, index: Math.max(0, Math.min(n - 1, at + dir * amount)) };
+}
+
 /**
  * Revalidate focus after an edit, undo/redo or selection change: null once the feature is gone,
  * turned into (or always was) a point of interest, or the index no longer exists.

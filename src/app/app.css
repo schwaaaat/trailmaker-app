@@ -148,6 +148,8 @@ select {
 
 /* sidebar */
 .side {
+  grid-column: 1;
+  grid-row: 2;
   overflow-y: auto;
   min-height: 0;
   border-right: 1px solid var(--line);
@@ -239,6 +241,20 @@ select {
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+.connect-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.connect-panel h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.connect-panel p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13.5px;
 }
 .x {
   border: 0;
@@ -709,6 +725,48 @@ select {
   height: 38px;
   padding: 3px;
 }
+.simplify-control {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.simplify-all-panel {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.simplify-header {
+  font-size: 14px;
+}
+.point-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--forest);
+}
+.chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chk input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--forest);
+  margin: 0;
+}
+.panel-actions {
+  margin-top: 10px;
+}
 
 /* step 4: export */
 .sum {
@@ -747,6 +805,8 @@ select {
 
 /* stage (T-212: a flex row so the georef split can sit beside the editor pane) */
 .stage {
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   flex-direction: row;
   min-width: 0;
@@ -884,6 +944,9 @@ select {
 .tip:empty {
   display: none;
 }
+.touch-only {
+  display: none;
+}
 /* T-209: right-click vertex menu. client.x/y are viewport coordinates (Editor.imageToClient). */
 .vertex-menu {
   position: fixed;
@@ -997,14 +1060,129 @@ select {
   padding: 1px 5px;
   white-space: nowrap;
 }
+.help-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+.reset-interface-confirm {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.reset-interface-confirm h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.reset-confirm-desc {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.reset-confirm-list {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.reset-confirm-note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.reset-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
 
 @media (max-width: 820px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+  body {
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  #root {
+    min-height: 100dvh;
+  }
   .app {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(300px, 58%) 1fr;
+    height: auto;
+    min-height: 100svh;
+    min-height: 100dvh;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    min-width: 0;
+  }
+  .app-header {
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 8px;
+    padding: 8px 10px;
+  }
+  .app-header h1 {
+    min-width: 0;
+    font-size: 20px;
+  }
+  .map-name {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .map-name input {
+    width: 1px;
+  }
+  .app-header > .seg {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+  .app-header > .seg button {
+    padding-inline: 9px;
   }
   .stage {
+    grid-column: 1;
     grid-row: 2;
+    min-height: 55svh;
+    min-height: 55dvh;
+    overflow: hidden;
+  }
+  .stage-editor,
+  .stage-georef {
+    min-height: 55svh;
+    min-height: 55dvh;
+    flex: 1 1 auto;
+  }
+  .stage-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    width: 100%;
+    background: var(--panel2);
+    border-bottom: 1px solid var(--line);
+  }
+  .stage-tabs button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 48px;
+    padding: 8px;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: transparent;
+    color: var(--ink);
+    font-weight: 700;
+  }
+  .stage-tabs button[aria-selected='true'] {
+    border-bottom-color: var(--blaze);
+    background: var(--panel);
   }
   .toolbar kbd,
   .toolbar .lbl {
@@ -1013,10 +1191,60 @@ select {
   .tip {
     font-size: 12.5px;
   }
+  .stage-georef[hidden],
+  .stage-editor[hidden] {
+    display: none;
+  }
   .side {
+    grid-column: 1;
     grid-row: 3;
+    min-height: 0;
+    height: auto;
+    overflow: visible;
     border-right: 0;
     border-top: 1px solid var(--line);
+  }
+}
+@media (max-width: 820px) and (pointer: coarse) {
+  .touch-only {
+    display: none;
+  }
+  .toolbar button,
+  .side .btn,
+  .vertex-menu button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .touch-only {
+    display: inline-flex;
+  }
+  .tip.touch-tip {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    left: 8px;
+    bottom: 8px;
+    width: min(240px, calc(100% - 16px));
+    max-width: 240px;
+    padding: 4px;
+    font-size: 12px;
+    line-height: 1.25;
+    pointer-events: none;
+  }
+  .tip-toggle {
+    pointer-events: auto;
+    flex: 0 0 44px;
+    width: 44px;
+    min-height: 44px;
+    border: 0;
+    border-radius: 7px;
+    background: var(--panel2);
+    color: var(--ink);
+    font-size: 20px;
+  }
+  .tip-text {
+    min-width: 0;
+    padding: 5px 3px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

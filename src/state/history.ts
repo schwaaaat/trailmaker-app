@@ -37,6 +37,19 @@ export class History {
 
   constructor(private readonly limit: number = HISTORY_LIMIT) {}
 
+  /** Capture both stacks and the coalescing boundary for a gesture that may be cancelled. */
+  checkpoint(): () => void {
+    const copy = (steps: readonly Step[]): Step[] => steps.map((step) => ({ commands: [...step.commands] }));
+    const past = copy(this.past);
+    const future = copy(this.future);
+    const open = this.open;
+    return () => {
+      this.past = copy(past);
+      this.future = copy(future);
+      this.open = open;
+    };
+  }
+
   /** Apply cmd, record it (coalescing with the previous step when keys match) and clear redo. */
   execute(project: Project, cmd: HistoryCommand): Project {
     const next = cmd.apply(project);

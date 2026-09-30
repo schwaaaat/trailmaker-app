@@ -6,6 +6,7 @@ import type { AnchorId, FeatureId, Px, Rgb } from '../../core/types';
 import { anchorOutlier } from '../../state/outliers';
 import { appStore, selectFit, type AppState, type Draft, type Tool } from '../../state/store';
 import { hitAnchor, hitHandle } from './hit';
+import { LongPressRecognizer, LONG_PRESS_TOLERANCE_PX } from './long-press';
 import { LineLayer } from './layer';
 import { renderFrame, type RenderModel } from './render';
 import { centerOn, fitView, panBy, toImg, toScr, zoomAt, type Screen, type View } from './view';
@@ -95,6 +96,8 @@ interface Press {
   readonly target: DragTarget | null;
   readonly shiftKey: boolean;
   readonly altKey: boolean;
+  readonly pointerType: string;
+  longPressed: boolean;
 }
 
 const isTyping = (t: EventTarget | null): boolean =>
@@ -114,6 +117,7 @@ export class Editor {
   private readonly pointers = new Map<number, Screen>();
   private pinch: { d: number; m: Screen } | null = null;
   private press: Press | null = null;
+  private readonly longPress: LongPressRecognizer;
   private spaceDown = false;
   private readonly listeners = new Map<keyof EditorEvents, Set<Listener<never>>>();
   private readonly cleanups: (() => void)[] = [];
@@ -139,6 +143,12 @@ export class Editor {
   }
 
   constructor(private readonly store = appStore) {
+    this.longPress = new LongPressRecognizer((_id, start) => {
+      const press = this.press;
+      if (!press || press.pointerType !== 'touch' || press.target?.kind !== 'vertex') return;
+      press.longPressed = true;
+      this.emit('contextmenu', this.at(start));
+    });
     // A sliced layer rebuild finished (T-211): show it.
     this.lines.onReady = () => this.invalidate();
   }
@@ -180,6 +190,7 @@ export class Editor {
   }
 
   destroy(): void {
+    this.longPress.cancel();
     for (const off of this.cleanups.splice(0)) off();
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.settleTimer) clearTimeout(this.settleTimer);
@@ -305,6 +316,7 @@ export class Editor {
       // Drag end brings leave-one-out residuals, which may turn a pin red (T-208).
       s.anchorDragging !== prev.anchorDragging ||
       s.vertexFocus !== prev.vertexFocus ||
+      s.simplifyPreview !== prev.simplifyPreview ||
       s.keyboardMode !== prev.keyboardMode ||
       s.tool !== prev.tool
     ) {
@@ -368,6 +380,8 @@ export class Editor {
       isOutlier: (id) => (fit?.ok ? anchorOutlier(fit, id) : false),
       focusedVertex: s.vertexFocus,
       centerCrosshair: s.keyboardMode && placementTool && !s.draft,
+      simplifyPreview: s.simplifyPreview ?? null,
+      connectPreview: s.connectSession?.connector ?? null,
     };
   }
 
@@ -435,6 +449,15 @@ export class Editor {
     const s = this.local(e);
     this.pointers.set(e.pointerId, s);
     if (this.pointers.size === 2) {
+      this.longPress.pointerDown(e.pointerId, s[0], s[1], false);
+      const press = this.press;
+      if (press?.moved && press.target && !press.pan) {
+        this.emit('dragEnd', {
+          ...this.at(press.last, true),
+          target: press.target,
+          cancelled: true,
+        });
+      }
       const [a, b] = [...this.pointers.values()] as [Screen, Screen];
       this.pinch = {
         d: Math.hypot(a[0] - b[0], a[1] - b[1]),
@@ -446,6 +469,12 @@ export class Editor {
     const tool = this.store.getState().tool;
     const pan = e.button === 1 || (e.button === 2 && tool !== 'select') || this.spaceDown;
     const target = pan || e.button !== 0 ? null : this.targetAt(s);
+    this.longPress.pointerDown(
+      e.pointerId,
+      s[0],
+      s[1],
+      e.pointerType === 'touch' && target?.kind === 'vertex',
+    );
     this.press = {
       start: s,
       last: s,
@@ -455,12 +484,15 @@ export class Editor {
       target,
       shiftKey: e.shiftKey,
       altKey: e.altKey,
+      pointerType: e.pointerType,
+      longPressed: false,
     };
   }
 
   private onPointerMove(e: PointerEvent): void {
     if (!this.hasMap()) return;
     const s = this.local(e);
+    this.longPress.pointerMove(e.pointerId, s[0], s[1]);
     this.cursor = s;
     this.emit('cursor', this.at(s));
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, s);
@@ -480,7 +512,12 @@ export class Editor {
       if (this.store.getState().draft) this.invalidate();
       return;
     }
-    if (!p.moved && Math.hypot(s[0] - p.start[0], s[1] - p.start[1]) > DRAG_THRESHOLD_PX) {
+    if (p.longPressed) return;
+    const dragThreshold =
+      p.pointerType === 'touch' && p.target?.kind === 'vertex'
+        ? LONG_PRESS_TOLERANCE_PX
+        : DRAG_THRESHOLD_PX;
+    if (!p.moved && Math.hypot(s[0] - p.start[0], s[1] - p.start[1]) > dragThreshold) {
       p.moved = true;
       if (p.target && !p.pan) this.emit('dragStart', { ...this.at(s, true), target: p.target });
       else p.pan = true;
@@ -493,6 +530,7 @@ export class Editor {
   }
 
   private onPointerEnd(e: PointerEvent, cancelled: boolean): void {
+    this.longPress.pointerUp(e.pointerId);
     this.pointers.delete(e.pointerId);
     if (this.pinch) {
       if (this.pointers.size < 2) this.pinch = null;
@@ -503,6 +541,7 @@ export class Editor {
     if (!p) return;
     this.press = null;
     this.updateCursorStyle();
+    if (p.longPressed) return;
     const s = this.canvas ? this.local(e) : p.last;
     if (p.moved) {
       // A right-drag pan must not end by deleting the vertex under the cursor.

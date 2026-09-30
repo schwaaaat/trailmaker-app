@@ -5,6 +5,7 @@ void React;
 
 export interface BasemapConsentProps {
   styleUrl: string;
+  satelliteHost?: string;
   geocoderUrl?: string;
   geocoderEnabled?: boolean;
   onToggleGeocoder?: (enabled: boolean) => void;
@@ -26,6 +27,7 @@ export function getStyleHost(styleUrl: string): string {
 
 export const BasemapConsent: FC<BasemapConsentProps> = ({
   styleUrl,
+  satelliteHost,
   geocoderUrl,
   geocoderEnabled = false,
   onToggleGeocoder,
@@ -90,8 +92,9 @@ export const BasemapConsent: FC<BasemapConsentProps> = ({
           Live Basemap
         </h3>
         <p className="trailmaker-basemap-consent-text">
-          Shows a live map from {host}. Your map image and trails stay on this device; the tile
-          server sees which area you view.
+          {satelliteHost
+            ? `Shows a live map from ${host} (and satellite imagery from ${satelliteHost}). Your map image and trails stay on this device; the tile server sees which area you view.`
+            : `Shows a live map from ${host}. Your map image and trails stay on this device; the tile server sees which area you view.`}
         </p>
         {onToggleGeocoder && geocoderHost && (
           <label className="trailmaker-geocoder-consent">

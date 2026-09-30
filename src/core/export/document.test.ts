@@ -122,6 +122,18 @@ describe('toExportDocument', () => {
     expect(toExportDocument(project([], ''), FIT)).toStrictEqual({ name: 'Park map', features: [] });
   });
 
+  it('carries image provenance into the KML/KMZ export document', () => {
+    const base = project([], 'Satellite map');
+    const p: Project = {
+      ...base,
+      image: { ...base.image, attribution: 'Imagery: USDA NAIP via USGS The National Map', acquisitionYear: 2024 },
+    };
+    expect(toExportDocument(p, FIT)).toMatchObject({
+      imageAttribution: 'Imagery: USDA NAIP via USGS The National Map',
+      acquisitionYear: 2024,
+    });
+  });
+
   it('feeds the writers: project -> fit -> GPX valid against the XSD', () => {
     const doc = toExportDocument(
       project([area('a1'), trail('t1', [[0, 0], [50, 50], [99, 20]]), poi('p1', [4, 4])]),

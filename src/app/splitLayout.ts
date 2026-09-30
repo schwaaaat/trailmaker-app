@@ -2,9 +2,11 @@
 // position. This is device-local UI layout, not project data or a network opt-in (D-018 keeps
 // those in src/io/settings.ts, owned by Lane C), so it gets its own localStorage key.
 import { useEffect, useState } from 'react';
+import { SPLIT_LAYOUT_STORAGE_KEY } from '../io/settings';
 
+export { SPLIT_LAYOUT_STORAGE_KEY };
 export const NARROW_QUERY = '(max-width: 899px)';
-const STORAGE_KEY = 'trailmaker:splitLayout';
+const STORAGE_KEY = SPLIT_LAYOUT_STORAGE_KEY;
 
 export type PaneMode = 'pair' | 'overlay';
 
@@ -20,6 +22,28 @@ export const MAX_FRAC = 0.8;
 export const DEFAULT_FRAC = 0.55;
 
 const DEFAULTS: SplitLayoutState = { show: false, mode: 'pair', frac: DEFAULT_FRAC };
+
+const subscribers = new Set<(state: SplitLayoutState) => void>();
+
+export function subscribeSplitLayout(callback: (state: SplitLayoutState) => void): () => void {
+  subscribers.add(callback);
+  return () => {
+    subscribers.delete(callback);
+  };
+}
+
+export function resetSplitLayout(): SplitLayoutState {
+  const defaults: SplitLayoutState = { ...DEFAULTS };
+  saveSplitLayout(defaults);
+  for (const sub of subscribers) {
+    try {
+      sub(defaults);
+    } catch {
+      // Ignore subscriber errors
+    }
+  }
+  return defaults;
+}
 
 export function clampFrac(v: number): number {
   if (!Number.isFinite(v)) return DEFAULT_FRAC;
@@ -60,6 +84,7 @@ export function saveSplitLayout(state: SplitLayoutState): void {
     // Ignore quota or security errors, matching src/io/settings.ts.
   }
 }
+
 
 function matchesNow(query: string): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;

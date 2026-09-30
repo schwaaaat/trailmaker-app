@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newProject } from '../../core/project';
 import type { Anchor, AnchorId, Feature, FeatureId, Project } from '../../core/types';
-import { resetSettings, updateBasemapSettings } from '../../io/settings';
+import { loadSettings, resetSettings, updateBasemapSettings } from '../../io/settings';
 import { appStore, edit, openSession } from '../../state/store';
 import { addFeature, setAnchorCoords } from '../../state/commands';
 import type { LoadedMap } from '../contract';
@@ -500,5 +500,27 @@ describe('OverlayPreview', () => {
     const toolbar = container.querySelector('[role="toolbar"]');
     expect(toolbar).not.toBeNull();
     expect(toolbar?.getAttribute('aria-label')).toBe('Overlay controls');
+  });
+
+  it('renders Map / Satellite switch in overlay controls and toggles imagery (card T-316)', async () => {
+    updateBasemapSettings({ enabled: true, imagery: 'vector' });
+    createTestSession(validAnchors);
+
+    render(<OverlayPreview />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const satBtn = Array.from(container.querySelectorAll('.trailmaker-imagery-btn')).find(
+      (b) => b.textContent?.trim() === 'Satellite',
+    ) as HTMLButtonElement | undefined;
+    expect(satBtn).toBeDefined();
+
+    await act(async () => {
+      satBtn?.click();
+      await Promise.resolve();
+    });
+
+    expect(loadSettings().basemap.imagery).toBe('satellite');
   });
 });

@@ -1,5 +1,6 @@
 // Lane C. Service Worker registration and Cross-Origin Isolation coordinator (card T-310).
 import { defaultUpdateManager, type UpdateManager } from './update';
+import { normalizeBaseUrl, withBaseUrl } from './base';
 
 export const COI_RELOAD_KEY = 'trailmaker:coi_reloaded';
 
@@ -41,8 +42,9 @@ export function isProductionEnvironment(): boolean {
 export async function registerPwa(options: RegisterPwaOptions = {}): Promise<RegisterPwaResult> {
   const isIsolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
   const updateManager = options.updateManager ?? defaultUpdateManager;
-  const swUrl = options.swUrl ?? '/sw.js';
-  const scope = options.scope ?? '/';
+  const baseUrl = normalizeBaseUrl(import.meta.env.BASE_URL);
+  const swUrl = options.swUrl ?? withBaseUrl('sw.js', baseUrl);
+  const scope = options.scope ?? baseUrl;
   const reload = options.reload ?? (() => window.location.reload());
 
   if (isIsolated && typeof sessionStorage !== 'undefined') {
@@ -123,7 +125,7 @@ export async function registerPwa(options: RegisterPwaOptions = {}): Promise<Reg
   });
 
   const notifyWaitingWorker = (
-    worker: ServiceWorker | { postMessage: (msg: unknown) => void } | null
+    worker: ServiceWorker | { postMessage: (msg: unknown) => void } | null,
   ) => {
     if (worker) {
       updateManager.setWaitingWorker?.(worker);

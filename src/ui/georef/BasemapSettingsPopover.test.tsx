@@ -40,6 +40,47 @@ describe('BasemapSettingsPopover', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('gates Esri on a local API key and explains how to create and restrict it', () => {
+    const onChangeEsriApiKey = vi.fn();
+    render(
+      <BasemapSettingsPopover
+        isOpen={true}
+        onClose={vi.fn()}
+        styleUrl="https://tiles.openfreemap.org/styles/liberty"
+        enabled={true}
+        onToggleEnabled={vi.fn()}
+        onChangeStyleUrl={vi.fn()}
+        onResetStyleUrl={vi.fn()}
+        onChangeEsriApiKey={onChangeEsriApiKey}
+      />,
+    );
+    const option = container.querySelector('option[value="esri"]') as HTMLOptionElement;
+    expect(option.disabled).toBe(true);
+    expect(container.textContent).toContain('Create a free ArcGIS developer account');
+    expect(container.textContent).toContain("Restrict the key to this site's address");
+    const keyInput = container.querySelector('#esri-api-key-input') as HTMLInputElement;
+    expect(keyInput.type).toBe('password');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(keyInput, 'key-123');
+      keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(onChangeEsriApiKey).toHaveBeenCalledWith('key-123');
+
+    render(
+      <BasemapSettingsPopover
+        isOpen={true}
+        onClose={vi.fn()}
+        styleUrl="https://tiles.openfreemap.org/styles/liberty"
+        enabled={true}
+        onToggleEnabled={vi.fn()}
+        onChangeStyleUrl={vi.fn()}
+        onResetStyleUrl={vi.fn()}
+        esriApiKey="key-123"
+      />,
+    );
+    expect((container.querySelector('option[value="esri"]') as HTMLOptionElement).disabled).toBe(false);
+  });
+
   it('renders popover controls and responds to user interactions when open', () => {
     const onClose = vi.fn();
     const onToggleEnabled = vi.fn();
@@ -211,5 +252,113 @@ describe('BasemapSettingsPopover', () => {
     );
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+
+  it('renders satellite imagery source options and disclosure (card T-316)', () => {
+    const onChangeSatelliteProvider = vi.fn();
+
+    render(
+      <BasemapSettingsPopover
+        isOpen={true}
+        onClose={vi.fn()}
+        styleUrl="https://tiles.openfreemap.org/styles/liberty"
+        enabled={true}
+        onToggleEnabled={vi.fn()}
+        onChangeStyleUrl={vi.fn()}
+        onResetStyleUrl={vi.fn()}
+        satelliteProvider="usgs"
+        onChangeSatelliteProvider={onChangeSatelliteProvider}
+      />,
+    );
+
+    const select = container.querySelector('#satellite-provider-select') as HTMLSelectElement | null;
+    expect(select).not.toBeNull();
+    expect(select?.value).toBe('usgs');
+
+    expect(container.textContent).toContain('basemap.nationalmap.gov');
+    expect(container.textContent).toContain('No map image or project data is sent.');
+
+    act(() => {
+      if (select) {
+        select.value = 'esri';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+
+    expect(onChangeSatelliteProvider).toHaveBeenCalledWith('esri');
+  });
+
+  it('renders Reset interface action and handles confirmation step (Acceptance 1)', () => {
+    const onClose = vi.fn();
+    const onResetInterface = vi.fn();
+
+    render(
+      <BasemapSettingsPopover
+        isOpen={true}
+        onClose={onClose}
+        styleUrl="https://tiles.openfreemap.org/styles/liberty"
+        enabled={true}
+        onToggleEnabled={vi.fn()}
+        onChangeStyleUrl={vi.fn()}
+        onResetStyleUrl={vi.fn()}
+        onResetInterface={onResetInterface}
+      />,
+    );
+
+    // Reset interface button exists
+    const resetInterfaceBtn = container.querySelector(
+      'button[aria-label="Reset interface"]',
+    ) as HTMLButtonElement | null;
+    expect(resetInterfaceBtn).not.toBeNull();
+    expect(resetInterfaceBtn?.textContent).toContain('Reset interface');
+
+    // Click Reset interface to show confirmation step
+    act(() => {
+      resetInterfaceBtn?.click();
+    });
+
+    const confirmBox = container.querySelector(
+      '.trailmaker-reset-interface-confirm',
+    ) as HTMLElement | null;
+    expect(confirmBox).not.toBeNull();
+    expect(confirmBox?.textContent).toContain('Reset interface to defaults?');
+    expect(confirmBox?.textContent).toContain('Live basemap and geocoder permissions');
+    expect(confirmBox?.textContent).toContain('Basemap style, imagery (Map/Satellite), provider');
+    expect(confirmBox?.textContent).toContain('Split layout, pane widths, and mode');
+    expect(confirmBox?.textContent).toContain('Stage view tabs and collapsed hints');
+    expect(confirmBox?.textContent).toContain(
+      'Your project, map images, traced trails, and saved files are not touched.',
+    );
+
+    // Cancel returns to settings controls
+    const cancelBtn = container.querySelector(
+      '.trailmaker-btn-cancel-reset',
+    ) as HTMLButtonElement | null;
+    expect(cancelBtn).not.toBeNull();
+    act(() => {
+      cancelBtn?.click();
+    });
+    expect(container.querySelector('.trailmaker-reset-interface-confirm')).toBeNull();
+    expect(container.querySelector('input[type="checkbox"]')).not.toBeNull();
+    expect(onResetInterface).not.toHaveBeenCalled();
+
+    // Re-open confirmation and confirm reset
+    const resetInterfaceBtnAgain = container.querySelector(
+      'button[aria-label="Reset interface"]',
+    ) as HTMLButtonElement | null;
+    act(() => {
+      resetInterfaceBtnAgain?.click();
+    });
+
+    const confirmResetBtn = container.querySelector(
+      '.trailmaker-btn-confirm-reset',
+    ) as HTMLButtonElement | null;
+    expect(confirmResetBtn).not.toBeNull();
+    act(() => {
+      confirmResetBtn?.click();
+    });
+
+    expect(onResetInterface).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

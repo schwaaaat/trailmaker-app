@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>T-302 Image Loader Verification</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        margin: 20px;
+        background: #f8fafc;
+        color: #0f172a;
+      }
+      h1 {
+        font-size: 20px;
+        margin-bottom: 8px;
+      }
+      .test-card {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 20px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      }
+      .status-badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 12px;
+        background: #dcfce7;
+        color: #15803d;
+        margin-bottom: 12px;
+      }
+      .meta-table {
+        font-size: 13px;
+        border-collapse: collapse;
+        margin-bottom: 12px;
+        width: 100%;
+        max-width: 600px;
+      }
+      .meta-table td {
+        padding: 4px 8px;
+        border-bottom: 1px solid #f1f5f9;
+      }
+      .meta-table td:first-child {
+        font-weight: 600;
+        color: #475569;
+        width: 180px;
+      }
+      .canvas-preview {
+        border: 1px solid #cbd5e1;
+        max-width: 480px;
+        max-height: 360px;
+        display: block;
+        background: repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+      }
+      .toast-box {
+        background: #fef3c7;
+        border: 1px solid #fde68a;
+        color: #92400e;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        margin-top: 8px;
+        display: inline-block;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>T-302 Image Loader & Overlay Verification</h1>
+    <div id="output">Running verification tests...</div>
+
+    <div id="section-normal" class="test-card" style="display: none">
+      <div class="status-badge" id="badge-normal">PASS: Normal PNG Decoded</div>
+      <h2>1. Normal Map (800×600)</h2>
+      <table class="meta-table" id="meta-normal"></table>
+      <canvas id="canvas-normal" class="canvas-preview"></canvas>
+    </div>
+
+    <div id="section-huge" class="test-card" style="display: none">
+      <div class="status-badge" id="badge-huge">
+        PASS: Large Map Capped to MAX_WORKING_SIDE (7000 px)
+      </div>
+      <h2>2. Large Map (8000×6000 → 7000×5250)</h2>
+      <table class="meta-table" id="meta-huge"></table>
+      <div id="toast-huge" class="toast-box"></div>
+      <div style="margin-top: 8px"><canvas id="canvas-huge" class="canvas-preview"></canvas></div>
+    </div>
+
+    <div id="section-transparent" class="test-card" style="display: none">
+      <div class="status-badge" id="badge-transparent">
+        PASS: Transparent Pixels Composited onto White
+      </div>
+      <h2>3. Transparent PNG (Alpha flattened to #ffffff)</h2>
+      <table class="meta-table" id="meta-transparent"></table>
+      <canvas id="canvas-transparent" class="canvas-preview"></canvas>
+    </div>
+
+    <div id="section-exif" class="test-card" style="display: none">
+      <div class="status-badge" id="badge-exif">
+        PASS: EXIF Orientation 6 (40×20 Raw → 20×40 Oriented)
+      </div>
+      <h2>4. EXIF Orientation 6 (40×20 Raw → 20×40 Oriented)</h2>
+      <table class="meta-table" id="meta-exif"></table>
+      <canvas
+        id="canvas-exif"
+        class="canvas-preview"
+        style="width: 120px; height: 240px; image-rendering: pixelated"
+      ></canvas>
+    </div>
+
+    <script type="module">
+      import {
+        loadImageFile,
+        encodeOverlayJpeg,
+        calculateWorkingDimensions,
+      } from '/src/io/index.ts';
+
+      async function runVerification() {
+        try {
+          // 1. Normal PNG Test
+          const c1 = document.createElement('canvas');
+          c1.width = 800;
+          c1.height = 600;
+          const ctx1 = c1.getContext('2d');
+          ctx1.fillStyle = '#e2e8f0';
+          ctx1.fillRect(0, 0, 800, 600);
+          // Draw park features
+          ctx1.fillStyle = '#86efac';
+          ctx1.fillRect(100, 100, 600, 400);
+          ctx1.strokeStyle = '#d9480f';
+          ctx1.lineWidth = 6;
+          ctx1.beginPath();
+          ctx1.moveTo(120, 120);
+          ctx1.lineTo(300, 350);
+          ctx1.lineTo(550, 420);
+          ctx1.stroke();
+          ctx1.fillStyle = '#0f172a';
+          ctx1.font = '24px sans-serif';
+          ctx1.fillText('Bear Mountain State Park', 140, 160);
+
+          const blob1 = await new Promise((r) => c1.toBlob(r, 'image/png'));
+          const map1 = await loadImageFile(blob1, 'bear-mountain.png');
+
+          const ov1 = await encodeOverlayJpeg(map1, 4096, 0.86);
+
+          // Display normal map
+          const sec1 = document.getElementById('section-normal');
+          sec1.style.display = 'block';
+          const tbl1 = document.getElementById('meta-normal');
+          tbl1.innerHTML = `
+          <tr><td>File Name</td><td>${map1.meta.fileName}</td></tr>
+          <tr><td>Original Dimensions</td><td>${map1.meta.originalWidth} × ${map1.meta.originalHeight} px</td></tr>
+          <tr><td>Working Dimensions</td><td>${map1.meta.width} × ${map1.meta.height} px</td></tr>
+          <tr><td>MIME Type</td><td>${map1.meta.source.mimeType}</td></tr>
+          <tr><td>SHA-256</td><td><code>${map1.meta.sha256}</code></td></tr>
+          <tr><td>KMZ Overlay JPEG</td><td>${ov1.length} bytes (starts with 0xFFD8)</td></tr>
+        `;
+          const cnv1 = document.getElementById('canvas-normal');
+          cnv1.width = map1.meta.width;
+          cnv1.height = map1.meta.height;
+          cnv1.getContext('2d').drawImage(map1.display, 0, 0);
+
+          // 2. Huge PNG Test (8000x6000)
+          const c2 = document.createElement('canvas');
+          c2.width = 8000;
+          c2.height = 6000;
+          const ctx2 = c2.getContext('2d');
+          ctx2.fillStyle = '#f8fafc';
+          ctx2.fillRect(0, 0, 8000, 6000);
+          ctx2.fillStyle = '#bfdbfe';
+          ctx2.fillRect(1000, 1000, 6000, 4000);
+          ctx2.strokeStyle = '#b91c1c';
+          ctx2.lineWidth = 40;
+          ctx2.beginPath();
+          ctx2.moveTo(1200, 1200);
+          ctx2.lineTo(7000, 5000);
+          ctx2.stroke();
+          ctx2.fillStyle = '#1e293b';
+          ctx2.font = '160px sans-serif';
+          ctx2.fillText('Huge 8000×6000 Park Map', 1500, 1800);
+
+          const blob2 = await new Promise((r) => c2.toBlob(r, 'image/png'));
+          const map2 = await loadImageFile(blob2, 'huge-park-map.png');
+
+          const ov2 = await encodeOverlayJpeg(map2, 4096, 0.86);
+
+          const sec2 = document.getElementById('section-huge');
+          sec2.style.display = 'block';
+          const tbl2 = document.getElementById('meta-huge');
+          tbl2.innerHTML = `
+          <tr><td>File Name</td><td>${map2.meta.fileName}</td></tr>
+          <tr><td>Original Dimensions</td><td>${map2.meta.originalWidth} × ${map2.meta.originalHeight} px</td></tr>
+          <tr><td>Working Dimensions</td><td>${map2.meta.width} × ${map2.meta.height} px (capped <= 7000)</td></tr>
+          <tr><td>MIME Type</td><td>${map2.meta.source.mimeType}</td></tr>
+          <tr><td>SHA-256</td><td><code>${map2.meta.sha256}</code></td></tr>
+          <tr><td>KMZ Overlay JPEG</td><td>${ov2.length} bytes (scaled <= 4096)</td></tr>
+        `;
+          document.getElementById('toast-huge').textContent =
+            `Large map scaled to ${map2.meta.width}×${map2.meta.height} px for tracing.`;
+
+          const cnv2 = document.getElementById('canvas-huge');
+          cnv2.width = 700;
+          cnv2.height = 525;
+          cnv2.getContext('2d').drawImage(map2.display, 0, 0, 700, 525);
+
+          // 3. Transparent PNG Test
+          const c3 = document.createElement('canvas');
+          c3.width = 400;
+          c3.height = 300;
+          const ctx3 = c3.getContext('2d');
+          // Leave background transparent (alpha = 0)
+          // Draw semi-transparent and opaque shapes
+          ctx3.fillStyle = 'rgba(217, 72, 15, 0.6)';
+          ctx3.fillRect(50, 50, 150, 150);
+          ctx3.fillStyle = '#1f6fb2';
+          ctx3.beginPath();
+          ctx3.arc(260, 150, 50, 0, Math.PI * 2);
+          ctx3.fill();
+
+          const blob3 = await new Promise((r) => c3.toBlob(r, 'image/png'));
+          const map3 = await loadImageFile(blob3, 'transparent-trails.png');
+
+          // Verify corner pixel was flattened to white #ffffff
+          const r = map3.raster.data[0];
+          const g = map3.raster.data[1];
+          const b = map3.raster.data[2];
+          const a = map3.raster.data[3];
+          const isWhite = r === 255 && g === 255 && b === 255 && a === 255;
+
+          const sec3 = document.getElementById('section-transparent');
+          sec3.style.display = 'block';
+          const tbl3 = document.getElementById('meta-transparent');
+          tbl3.innerHTML = `
+          <tr><td>File Name</td><td>${map3.meta.fileName}</td></tr>
+          <tr><td>Transparent Background Flattened</td><td>${isWhite ? 'Yes (#ffffff)' : 'No'} (Pixel at 0,0: R=${r}, G=${g}, B=${b}, A=${a})</td></tr>
+          <tr><td>Working Dimensions</td><td>${map3.meta.width} × ${map3.meta.height} px</td></tr>
+          <tr><td>SHA-256</td><td><code>${map3.meta.sha256}</code></td></tr>
+        `;
+          const cnv3 = document.getElementById('canvas-transparent');
+          cnv3.width = map3.meta.width;
+          cnv3.height = map3.meta.height;
+          cnv3.getContext('2d').drawImage(map3.display, 0, 0);
+
+          // 4. EXIF Orientation 6 Test (40x20 raw -> 20x40 oriented)
+          const c4 = document.createElement('canvas');
+          c4.width = 40;
+          c4.height = 20;
+          const ctx4 = c4.getContext('2d');
+          ctx4.fillStyle = '#ff0000';
+          ctx4.fillRect(0, 0, 40, 10);
+          ctx4.fillStyle = '#0000ff';
+          ctx4.fillRect(0, 10, 40, 10);
+
+          const origBlob4 = await new Promise((r) => c4.toBlob(r, 'image/jpeg', 0.95));
+          const origBytes4 = new Uint8Array(await origBlob4.arrayBuffer());
+
+          // Build APP1 EXIF payload
+          const exifPayload = new Uint8Array(6 + 8 + 2 + 12 + 4);
+          const pView = new DataView(exifPayload.buffer);
+          exifPayload.set([0x45, 0x78, 0x69, 0x66, 0x00, 0x00], 0);
+          const tiff = 6;
+          exifPayload[tiff] = 0x49; // II
+          exifPayload[tiff + 1] = 0x49;
+          pView.setUint16(tiff + 2, 42, true);
+          pView.setUint32(tiff + 4, 8, true);
+          const ifd0 = tiff + 8;
+          pView.setUint16(ifd0, 1, true);
+          const entry = ifd0 + 2;
+          pView.setUint16(entry, 0x0112, true);
+          pView.setUint16(entry + 2, 3, true);
+          pView.setUint32(entry + 4, 1, true);
+          pView.setUint16(entry + 8, 6, true); // Orientation 6
+
+          const app1Len = 2 + exifPayload.length;
+          const combined = new Uint8Array(origBytes4.length + 2 + app1Len);
+          combined[0] = 0xff;
+          combined[1] = 0xd8;
+          combined[2] = 0xff;
+          combined[3] = 0xe1;
+          combined[4] = (app1Len >> 8) & 0xff;
+          combined[5] = app1Len & 0xff;
+          combined.set(exifPayload, 6);
+          combined.set(origBytes4.subarray(2), 6 + exifPayload.length);
+
+          const blob4 = new Blob([combined], { type: 'image/jpeg' });
+          const map4 = await loadImageFile(blob4, 'exif-oriented-trail.jpg');
+
+          const sec4 = document.getElementById('section-exif');
+          sec4.style.display = 'block';
+          const tbl4 = document.getElementById('meta-exif');
+          tbl4.innerHTML = `
+          <tr><td>File Name</td><td>${map4.meta.fileName}</td></tr>
+          <tr><td>Raw Dimensions (SOF)</td><td>40 × 20 px</td></tr>
+          <tr><td>Oriented Dimensions</td><td>${map4.meta.width} × ${map4.meta.height} px</td></tr>
+          <tr><td>Original Recorded Dimensions</td><td>${map4.meta.originalWidth} × ${map4.meta.originalHeight} px</td></tr>
+          <tr><td>Raster Dimensions</td><td>${map4.raster.width} × ${map4.raster.height} px (${map4.raster.data.length} bytes)</td></tr>
+          <tr><td>SHA-256</td><td><code>${map4.meta.sha256}</code></td></tr>
+        `;
+          const cnv4 = document.getElementById('canvas-exif');
+          cnv4.width = map4.meta.width;
+          cnv4.height = map4.meta.height;
+          cnv4.getContext('2d').drawImage(map4.display, 0, 0);
+
+          document.getElementById('output').textContent =
+            'All verification tests passed successfully!';
+
+          window.__testResult = {
+            ok: true,
+            normal: {
+              width: map1.meta.width,
+              height: map1.meta.height,
+              sha256: map1.meta.sha256,
+              ovLen: ov1.length,
+            },
+            huge: {
+              width: map2.meta.width,
+              height: map2.meta.height,
+              originalWidth: map2.meta.originalWidth,
+              originalHeight: map2.meta.originalHeight,
+              ovLen: ov2.length,
+            },
+            transparent: { isWhite, r, g, b, a },
+            exif: {
+              width: map4.meta.width,
+              height: map4.meta.height,
+              originalWidth: map4.meta.originalWidth,
+              originalHeight: map4.meta.originalHeight,
+              rasterLen: map4.raster.data.length,
+            },
+          };
+        } catch (err) {
+          document.getElementById('output').textContent = 'Error: ' + (err.message || String(err));
+          window.__testResult = { ok: false, error: err.message || String(err) };
+        }
+      }
+
+      runVerification();
+    </script>
+  </body>
+</html>

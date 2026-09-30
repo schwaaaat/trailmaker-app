@@ -28,6 +28,17 @@ describe('toKml', () => {
     expectGolden('odd.kml', toKml(ODD, { ...OPTS, units: 'km' }, null));
   });
 
+  it('writes escaped imagery attribution and acquisition year in the document description', () => {
+    const doc = {
+      ...MIXED,
+      imageAttribution: 'Imagery: USDA & USGS',
+      acquisitionYear: 2024,
+    };
+    const kml = toKml(doc, OPTS, null);
+    expect(kml).toContain('<description>Imagery: USDA &amp; USGS (acquired 2024)</description>');
+    expect(() => parseKml(kml)).not.toThrow();
+  });
+
   it('writes lon,lat,0 coordinates that round-trip, with a closed area ring and the overlay quad', () => {
     const expected = (f: GeoFeature): readonly LatLon[] =>
       f.kind === 'poi' ? [f.ll] : f.kind === 'area' ? [...f.ll, f.ll[0]!] : f.ll;

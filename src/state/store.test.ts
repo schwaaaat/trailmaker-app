@@ -13,6 +13,7 @@ import {
   setCandidateOn,
   setCandidates,
   setDraft,
+  setVertexFocus,
   splitCandidateInReview,
   undo,
   undoCandidateSplit,
@@ -32,6 +33,24 @@ beforeEach(() => {
 });
 
 describe('store', () => {
+  it('announces a focused vertex as a point number', () => {
+    const project = makeProject({
+      features: [
+        {
+          kind: 'trail',
+          id: 'focus-trail',
+          name: 'Trail',
+          color: '#D9480F',
+          notes: '',
+          pts: Array.from({ length: 52 }, (_, i) => [i, 0] as [number, number]),
+          ink: null,
+        },
+      ],
+    });
+    openSession(makeSession(project));
+    setVertexFocus({ featureId: 'focus-trail', index: 13 });
+    expect(appStore.getState().announcement?.text).toBe('Point 14 of 52');
+  });
   it('edits, undoes and redoes through history, mirroring status into state', () => {
     const { command, id } = C.addAnchor(project(), [5, 5]);
     expect(edit(command, { anchor: id })).toBe(true);
@@ -232,8 +251,22 @@ describe('store', () => {
     expect(appStore.getState().reviewUndoStack).toStrictEqual([]);
     expect(undoCandidateSplit()).toBe(false);
 
-    const a: ReviewCandidate = { ...cand, id: 'k1a', pts: [[0, 0], [4, 4]] };
-    const b: ReviewCandidate = { ...cand, id: 'k1b', pts: [[4, 4], [9, 9]] };
+    const a: ReviewCandidate = {
+      ...cand,
+      id: 'k1a',
+      pts: [
+        [0, 0],
+        [4, 4],
+      ],
+    };
+    const b: ReviewCandidate = {
+      ...cand,
+      id: 'k1b',
+      pts: [
+        [4, 4],
+        [9, 9],
+      ],
+    };
     splitCandidateInReview([a, b]);
     expect(appStore.getState().candidates).toStrictEqual([a, b]);
     expect(appStore.getState().reviewUndoStack).toStrictEqual([[cand]]);

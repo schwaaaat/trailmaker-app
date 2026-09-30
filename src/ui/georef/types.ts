@@ -29,6 +29,8 @@ export interface BasemapPaneProps {
   overrideStyleUrl?: string;
   /** Custom confirmation callback for testing or modal dialogs. */
   confirm?: (message: string) => boolean;
+  /** Callback to reset interface to defaults (T-224). */
+  onResetInterface?: (() => void) | undefined;
   /** Child elements to overlay inside the basemap pane (e.g. markers, preview canvas). */
   children?: ReactNode;
 }

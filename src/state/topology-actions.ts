@@ -1,7 +1,14 @@
 // Lane B. Split/join/clean-up-junctions actions (card T-209): build a TopologyEdit from
 // src/core/topology's pure functions and apply it as one undo step through the store.
-import { hasUnsnappedEnds, joinTrails, snapTrailEnds, splitTrail } from '../core/topology';
-import type { Feature, FeatureId, Px, Trail } from '../core/types';
+import {
+  connectTrailPoints,
+  hasUnsnappedEnds,
+  joinTrails,
+  snapTrailEnds,
+  splitTrail,
+  type TrailPoint,
+} from '../core/topology';
+import { DEFAULT_COLORS, type Feature, type FeatureId, type Px, type Trail } from '../core/types';
 import { applyTopologyEdit } from './commands';
 import { appStore, edit, showToast } from './store';
 
@@ -30,10 +37,7 @@ const samePt = (a: Px, b: Px): boolean => a[0] === b[0] && a[1] === b[1];
  * How many trail ends actually moved between the pre-edit features and a snap/split/join's
  * `updated` list. A trail that only gained a mid-line junction vertex has no moved end.
  */
-export function countSnappedEnds(
-  before: readonly Feature[],
-  updated: readonly Feature[],
-): number {
+export function countSnappedEnds(before: readonly Feature[], updated: readonly Feature[]): number {
   let n = 0;
   for (const u of updated) {
     if (u.kind !== 'trail' || !u.pts.length) continue;
@@ -71,6 +75,28 @@ export function joinSelected(): void {
   edit(applyTopologyEdit(p, result), { feature: a.id });
 }
 
+/** Commit a new connector and any inserted shared junction vertices as one history command. */
+export function connectSelectedPoints(a: TrailPoint, b: TrailPoint, path: readonly Px[]): boolean {
+  const p = project();
+  if (!p || path.length < 2) return false;
+  const connector: Trail = {
+    id: `f${p.seq}`,
+    kind: 'trail',
+    name: 'Connector',
+    color: DEFAULT_COLORS.trail,
+    notes: '',
+    ink: null,
+    pts: [a.point, ...path.slice(1, -1), b.point],
+  };
+  try {
+    const result = connectTrailPoints(p.features, a, b, connector);
+    return edit(applyTopologyEdit(p, result, 'Connect trails'), { feature: connector.id });
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'Could not connect these points');
+    return false;
+  }
+}
+
 /** "Clean up junctions" (the step-3 button, or the export hint's button). */
 export function cleanupJunctions(tolerancePx: number): void {
   const p = project();
@@ -97,11 +123,7 @@ let hintMemo: {
  * (D-023 item 3), and is memoized on the features array reference.
  */
 export function needsCleanup(features: readonly Feature[], tolerancePx: number): boolean {
-  if (
-    hintMemo &&
-    hintMemo.features === features &&
-    hintMemo.tolerancePx === tolerancePx
-  ) {
+  if (hintMemo && hintMemo.features === features && hintMemo.tolerancePx === tolerancePx) {
     return hintMemo.result;
   }
   const result = hasUnsnappedEnds(features, { tolerancePx });

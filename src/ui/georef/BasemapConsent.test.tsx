@@ -179,4 +179,20 @@ describe('BasemapConsent', () => {
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
   });
+
+  it('names satellite host in privacy disclosure when provided (card T-316)', () => {
+    render(
+      <BasemapConsent
+        styleUrl="https://tiles.openfreemap.org/styles/liberty"
+        satelliteHost="basemap.nationalmap.gov"
+        onEnable={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain(
+      'Shows a live map from tiles.openfreemap.org (and satellite imagery from basemap.nationalmap.gov). Your map image and trails stay on this device; the tile server sees which area you view.',
+    );
+  });
 });

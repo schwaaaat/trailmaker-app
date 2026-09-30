@@ -14,7 +14,6 @@ import type { GeoFit } from '../../core/types';
 import { encodeOverlayJpeg } from '../../io/overlay';
 import {
   type AppSettings,
-  DEFAULT_BASEMAP_STYLE_URL,
   DEFAULT_OVERLAY_OPACITY,
   loadSettings,
   subscribeSettings,
@@ -23,8 +22,10 @@ import {
 import { useApp, useFit } from '../../state/hooks';
 import { runSliced } from '../editor/slice';
 import { BasemapConsent } from './BasemapConsent';
+import { ImagerySwitch } from './ImagerySwitch';
 import { computeInitialView } from './initialView';
 import { loadMapLibre } from './loader';
+import { getEffectiveStyle, getSatelliteHost } from './satellite';
 import {
   buildOverlaySpec,
   debounce,
@@ -83,7 +84,9 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
   opacityRef.current = opacity;
 
   const isEnabled = settings.basemap.enabled && !isDismissed;
-  const effectiveStyleUrl = overrideStyleUrl || settings.basemap.styleUrl || DEFAULT_BASEMAP_STYLE_URL;
+  const effectiveStyle = React.useMemo(() => {
+    return getEffectiveStyle(settings.basemap, overrideStyleUrl);
+  }, [settings.basemap, overrideStyleUrl]);
 
   // Subscribe to external settings changes
   useEffect(() => {
@@ -374,10 +377,12 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
         try {
           const map = new maplibre.Map({
             container: containerRef.current,
-            style: effectiveStyleUrl,
+            style: effectiveStyle,
             center: view.center ?? [0, 20],
             zoom: view.zoom ?? (view.bounds ? 10 : 1),
-            attributionControl: { compact: true },
+            attributionControl: {
+              compact: typeof window !== 'undefined' ? window.innerWidth <= 820 : true,
+            },
           });
 
           map.addControl(new maplibre.NavigationControl({ showCompass: true }), 'top-left');
@@ -411,7 +416,7 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
         setIsReady(false);
       }
     };
-  }, [isEnabled, effectiveStyleUrl, fit?.ok]);
+  }, [isEnabled, effectiveStyle, fit?.ok]);
 
   // Debounced 300 ms re-warp on anchor/fit changes (Acceptance 4)
   useEffect(() => {
@@ -515,7 +520,8 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
         aria-label="Overlay preview"
       >
         <BasemapConsent
-          styleUrl={effectiveStyleUrl}
+          styleUrl={typeof effectiveStyle === 'string' ? effectiveStyle : settings.basemap.styleUrl}
+          satelliteHost={getSatelliteHost(settings.basemap.satelliteProvider)}
           onEnable={() => {
             updateBasemapSettings({ enabled: true });
             setIsDismissed(false);
@@ -544,6 +550,10 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
       />
 
       <div className="trailmaker-overlay-controls" role="toolbar" aria-label="Overlay controls">
+        <ImagerySwitch
+          imagery={settings.basemap.imagery ?? 'vector'}
+          onChange={(imagery) => updateBasemapSettings({ imagery })}
+        />
         <div className="trailmaker-overlay-opacity-control">
           <label htmlFor="trailmaker-overlay-opacity">Map opacity</label>
           <input

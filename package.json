@@ -1,6 +1,6 @@
 {
   "name": "trailmaker",
-  "version": "1.0.1",
+  "version": "1.4.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -18,9 +18,10 @@
     "test": "vitest run --coverage && pnpm test:kmz-stress",
     "test:kmz-stress": "vitest run --config vitest.kmz-stress.config.ts",
     "test:e2e": "playwright test && playwright test --config playwright.preview.config.ts",
+    "test:e2e:pages": "playwright test --config playwright.pages.config.ts",
     "test:trace-bench": "tsx tests/bench/run.ts",
     "fixtures": "tsx tests/fixtures/generate.ts",
-    "gate": "pnpm typecheck && pnpm lint && pnpm test && pnpm fixtures && pnpm test:e2e && pnpm test:trace-bench && pnpm build"
+    "gate": "pnpm typecheck && pnpm lint && pnpm test && pnpm fixtures && pnpm test:e2e && pnpm test:e2e:pages && pnpm test:trace-bench && pnpm build"
   },
   "dependencies": {
     "comlink": "^4.4.2",

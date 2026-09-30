@@ -1,6 +1,7 @@
 import type { Anchor, GeoFit, LatLon } from '../types';
 import { haversine } from './distance';
 import { fitAnchors, forward } from './fit';
+import { supportsAffine } from './conditioning';
 
 const kernel = (r2: number): number => (r2 > 0 ? r2 * Math.log(r2) : 0);
 
@@ -41,7 +42,11 @@ function solveFactored(
   return value;
 }
 
-function tpsClosedForm(fit: GeoFit, valid: readonly { anchor: Anchor; index: number }[]): Record<string, number> | null {
+function tpsClosedForm(
+  fit: GeoFit,
+  valid: readonly { anchor: Anchor; index: number }[],
+  checkable: ReadonlySet<string>,
+): Record<string, number> | null {
   if (fit.method !== 'tps' || fit.model.kind !== 'tps' || valid.length < 5) return null;
   const { controls, weightsE, weightsN } = fit.model;
   if (controls.length !== valid.length) return null;
@@ -63,6 +68,7 @@ function tpsClosedForm(fit: GeoFit, valid: readonly { anchor: Anchor; index: num
   const residuals: Record<string, number> = {};
   const rhs = new Array<number>(size).fill(0);
   for (let i = 0; i < n; i++) {
+    if (!checkable.has(valid[i]!.anchor.id)) continue;
     rhs.fill(0);
     rhs[i] = 1;
     const inverseColumn = solveFactored(factored.lu, factored.permutation, rhs);
@@ -97,10 +103,27 @@ export function withLooResiduals(
     );
   const looResiduals: Record<string, number> = {};
 
-  const closedForm = tpsClosedForm(fit, valid);
+  const requiresAffineSupport =
+    fit.requested === 'affine' ||
+    fit.requested === 'tps' ||
+    fit.method === 'affine' ||
+    fit.method === 'tps' ||
+    (fit.requested === 'auto' && fit.anchorCount >= 4);
+  const checkable = new Set(
+    valid
+      .filter(({ index }) => {
+        if (!requiresAffineSupport) return true;
+        const remaining = valid.filter((entry) => entry.index !== index).map(({ anchor }) => anchor.px);
+        return supportsAffine(remaining);
+      })
+      .map(({ anchor }) => anchor.id),
+  );
+
+  const closedForm = tpsClosedForm(fit, valid, checkable);
   if (closedForm) return { ...fit, looResiduals: closedForm };
 
   for (const { anchor, index } of valid) {
+    if (!checkable.has(anchor.id)) continue;
     const others = anchors.filter((_, otherIndex) => otherIndex !== index);
     const looFit = fitAnchors(others, width, height, fit.requested);
     if (!looFit.ok) continue;

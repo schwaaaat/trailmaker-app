@@ -5,6 +5,35 @@ type End = { trail: Trail; side: 0 | 1; point: Px };
 type Insertion = { index: number; t: number; point: Px };
 type DetectorEnd = { trailIndex: number; trail: Trail; point: Px };
 
+/** A chosen location on a trail segment. `segmentIndex` identifies pts[i]..pts[i + 1]. */
+export interface TrailPoint {
+  readonly trailId: FeatureId;
+  readonly segmentIndex: number;
+  readonly point: Px;
+}
+
+/** Project a map-pixel location onto the nearest segment of a trail. */
+export function projectTrailPoint(trail: Trail, point: Px): TrailPoint {
+  let best: TrailPoint | null = null;
+  let bestDistance = Infinity;
+  for (let i = 0; i < trail.pts.length - 1; i++) {
+    const start = trail.pts[i]!;
+    const end = trail.pts[i + 1]!;
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const length2 = dx * dx + dy * dy;
+    const fraction = length2 === 0 ? 0 : Math.max(0, Math.min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length2));
+    const projected: Px = [start[0] + fraction * dx, start[1] + fraction * dy];
+    const d2 = distanceSquared(point, projected);
+    if (d2 < bestDistance) {
+      bestDistance = d2;
+      best = { trailId: trail.id, segmentIndex: i, point: projected };
+    }
+  }
+  if (!best) throw new RangeError('Trail must contain a segment');
+  return best;
+}
+
 const distanceSquared = (a: Px, b: Px): number => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
 const samePoint = (a: Px, b: Px): boolean => a[0] === b[0] && a[1] === b[1];
 const reverse = <T>(items: readonly T[]): T[] => [...items].reverse();
@@ -480,4 +509,51 @@ export function joinTrails(a: Trail, b: Trail): TopologyEdit {
   const best = options[0]!;
   const tail = best.distance2 <= 0.25 ? best.right.slice(1) : best.right;
   return { updated: [{ ...a, pts: [...best.left, ...tail] }], removed: [b.id] };
+}
+
+/** Add a separate connector trail between two exact locations, inserting interior vertices. */
+export function connectTrailPoints(
+  features: readonly Feature[],
+  a: TrailPoint,
+  b: TrailPoint,
+  connector: Trail,
+): TopologyEdit {
+  if (connector.id === a.trailId || connector.id === b.trailId) {
+    throw new RangeError('Connector must have a new id');
+  }
+  const byId = new Map(features.filter((f): f is Trail => f.kind === 'trail').map((f) => [f.id, f]));
+  const ends = [a, b] as const;
+  for (const end of ends) {
+    const trail = byId.get(end.trailId);
+    if (!trail || !Number.isInteger(end.segmentIndex) || end.segmentIndex < 0 || end.segmentIndex >= trail.pts.length - 1) {
+      throw new RangeError('Connect point must lie on a trail segment');
+    }
+    if (!end.point.every(Number.isFinite)) throw new RangeError('Connect point must be finite');
+  }
+  const updated: Trail[] = [];
+  for (const trailId of new Set(ends.map((end) => end.trailId))) {
+    const trail = byId.get(trailId)!;
+    const points = ends.filter((end) => end.trailId === trailId).sort((left, right) => {
+      const at = (end: TrailPoint) => {
+        const start = trail.pts[end.segmentIndex]!;
+        const next = trail.pts[end.segmentIndex + 1]!;
+        const dx = next[0] - start[0];
+        const dy = next[1] - start[1];
+        return end.segmentIndex + ((end.point[0] - start[0]) * dx + (end.point[1] - start[1]) * dy) / (dx * dx + dy * dy || 1);
+      };
+      return at(left) - at(right);
+    });
+    const pts: Px[] = [];
+    for (let i = 0; i < trail.pts.length; i++) {
+      const vertex = trail.pts[i]!;
+      pts.push(vertex);
+      for (const end of points) {
+        if (end.segmentIndex !== i || samePoint(end.point, vertex)) continue;
+        if (i + 1 < trail.pts.length && samePoint(end.point, trail.pts[i + 1]!)) continue;
+        if (!pts.some((point) => samePoint(point, end.point))) pts.push(end.point);
+      }
+    }
+    if (pts.length !== trail.pts.length) updated.push({ ...trail, pts });
+  }
+  return { updated: [...updated, { ...connector, pts: [a.point, ...connector.pts.slice(1, -1), b.point] }], removed: [] };
 }

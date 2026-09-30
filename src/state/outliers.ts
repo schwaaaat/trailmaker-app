@@ -20,6 +20,7 @@ export function looOutlierLimit(fit: GeoFit): number | null {
 
 /** Whether an anchor should be flagged (red badge and pin). */
 export function anchorOutlier(fit: GeoFit, id: AnchorId): boolean {
+  if (!fit.checked) return false;
   const loo = fit.looResiduals?.[id];
   const limit = looOutlierLimit(fit);
   if (loo !== undefined && limit !== null) return loo > limit;

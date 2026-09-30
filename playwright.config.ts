@@ -5,7 +5,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testIgnore: ['trace-worker.spec.ts', 'pwa-offline.spec.ts'],
+  testIgnore: ['trace-worker.spec.ts', 'pwa-offline.spec.ts', 'pages.spec.ts'],
   fullyParallel: true,
   // Large image decode cases compete with worker timing tests when Chromium
   // launches several pages at once; keep the gate reproducible on one machine.

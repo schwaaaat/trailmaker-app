@@ -1,7 +1,76 @@
 // Lane C. Anchor pairing state machine (card T-307).
 import type { Anchor, AnchorId, HistoryCommand, LatLon, Project } from '../../core/types';
 import { removeAnchor, setAnchorCoords } from '../../state/commands';
-import type { AppState } from '../../state/store';
+import { appStore, type AppState } from '../../state/store';
+
+export type StageView = 'map' | 'basemap' | 'overlay';
+
+/** Check if the current environment is a phone / narrow viewport (≤ 820px). */
+export function isNarrowPhone(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.matchMedia === 'function') {
+    try {
+      return window.matchMedia('(max-width: 820px)').matches;
+    } catch {
+      // fallback
+    }
+  }
+  return typeof window.innerWidth === 'number' ? window.innerWidth <= 820 : false;
+}
+
+/**
+ * Call T-219's stageView setter on the app store, with graceful fallback.
+ */
+export function setStageView(view: StageView, targetStore = appStore): void {
+  const store = targetStore as unknown as {
+    getState: () => { setStageView?: (v: StageView) => void; stageView?: StageView };
+    setState: (partial: { stageView: StageView }) => void;
+  };
+  const state = store.getState();
+  if (typeof state.setStageView === 'function') {
+    state.setStageView(view);
+  } else if (
+    typeof (targetStore as unknown as { setStageView?: (v: StageView) => void }).setStageView ===
+    'function'
+  ) {
+    (targetStore as unknown as { setStageView: (v: StageView) => void }).setStageView(view);
+  } else if (typeof store.setState === 'function') {
+    store.setState({ stageView: view });
+  }
+}
+
+let prevPairingStatus: PairingStatus = 'idle';
+let pairingPhoneSyncUnsub: (() => void) | null = null;
+
+/**
+ * Sync phone pairing tab switches: when status becomes 'pending' on a narrow viewport,
+ * switches to the basemap tab. Returns a cleanup function.
+ */
+export function initPairingPhoneSync(store = appStore): () => void {
+  if (pairingPhoneSyncUnsub) return pairingPhoneSyncUnsub;
+  prevPairingStatus = getPairingState(store.getState()).status;
+  const unsub = store.subscribe((state) => {
+    const current = getPairingState(state);
+    if (current.status === 'pending' && prevPairingStatus !== 'pending') {
+      if (isNarrowPhone()) {
+        setStageView('basemap', store);
+      }
+    }
+    prevPairingStatus = current.status;
+  });
+  pairingPhoneSyncUnsub = () => {
+    unsub();
+    pairingPhoneSyncUnsub = null;
+    prevPairingStatus = 'idle';
+  };
+  return pairingPhoneSyncUnsub;
+}
+
+export function stopPairingPhoneSync(): void {
+  if (pairingPhoneSyncUnsub) {
+    pairingPhoneSyncUnsub();
+  }
+}
 
 export type PairingStatus =
   | 'idle'
@@ -114,6 +183,9 @@ export function handleBasemapClick(
     const anchorId = pairing.pendingAnchor.id;
     const cmd = setAnchorCoords(project, anchorId, latLon, 'basemap');
     edit(cmd, { anchor: anchorId });
+    if (isNarrowPhone()) {
+      setStageView('map');
+    }
     return { action: 'set', anchorId, ll: latLon };
   }
 
@@ -164,8 +236,16 @@ export function handleCancelPairing(deps: CancelPairingDeps): CancelPairingResul
     const anchorId = pairing.pendingAnchor.id;
     edit(removeAnchor(project, anchorId));
     selectAnchor(null);
+    if (isNarrowPhone()) {
+      setStageView('map');
+    }
     return { action: 'cancel', anchorId };
   }
 
   return { action: 'none' };
+}
+
+// Auto-initialize pairing sync in browser environment
+if (typeof window !== 'undefined') {
+  initPairingPhoneSync();
 }

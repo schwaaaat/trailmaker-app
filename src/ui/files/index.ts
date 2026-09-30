@@ -2,6 +2,7 @@
 import './files.css';
 
 export { OpenMapButton, type OpenMapButtonProps } from './OpenMapButton';
+export { StartSatelliteButton, type StartSatelliteButtonProps } from './StartSatelliteButton';
 export { OpenProjectButton, type OpenProjectButtonProps } from './OpenProjectButton';
 export { SaveProjectButton, type SaveProjectButtonProps } from './SaveProjectButton';
 export { MapDropZone, type MapDropZoneProps } from './MapDropZone';

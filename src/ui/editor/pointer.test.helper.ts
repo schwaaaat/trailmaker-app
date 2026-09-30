@@ -28,7 +28,13 @@ export function ptr(
   type: string,
   x: number,
   y: number,
-  init: { button?: number; id?: number; shiftKey?: boolean; altKey?: boolean } = {},
+  init: {
+    button?: number;
+    id?: number;
+    shiftKey?: boolean;
+    altKey?: boolean;
+    pointerType?: string;
+  } = {},
 ): MouseEvent {
   const e = new MouseEvent(type, {
     clientX: RECT.left + x,
@@ -40,6 +46,7 @@ export function ptr(
     cancelable: true,
   });
   Object.defineProperty(e, 'pointerId', { value: init.id ?? 1 });
+  Object.defineProperty(e, 'pointerType', { value: init.pointerType ?? 'mouse' });
   c.dispatchEvent(e);
   return e;
 }

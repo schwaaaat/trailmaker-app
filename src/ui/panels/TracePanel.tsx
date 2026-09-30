@@ -201,8 +201,8 @@ function CandidateSplitButton({ c }: { c: ReviewCandidate }) {
   const focus = useApp((s) => s.candidateSplitFocus ?? null);
   const focused = focus?.candidateId === c.id;
   const title = focused
-    ? `Split at point ${focus.index + 1} of ${c.pts.length}; use arrow keys, Shift for 10 points`
-    : 'Focus to choose a split point with the arrow keys';
+    ? `Split at point ${focus.index + 1} of ${c.pts.length}; use arrows or , / .; use Shift+arrows, < / >, or [ / ] for 10 points`
+    : 'Focus to choose a split point with arrows or , / .; < / > and [ / ] move 10 points';
   const startFocus = () => {
     const index = initialCandidateSplitPoint(c.pts.length);
     if (index !== null) setCandidateSplitFocus({ candidateId: c.id, index, moved: false });
@@ -212,7 +212,7 @@ function CandidateSplitButton({ c }: { c: ReviewCandidate }) {
       type="button"
       className="btn tiny"
       title={title}
-      aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Enter"
+      aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown Comma Period LessThan GreaterThan BracketLeft BracketRight Shift+Comma Shift+Period Enter"
       onFocus={() => {
         if (!focused) startFocus();
       }}
@@ -221,15 +221,30 @@ function CandidateSplitButton({ c }: { c: ReviewCandidate }) {
           setCandidateSplitFocus(null);
       }}
       onKeyDown={(e) => {
-        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+        if (
+          ![
+            'ArrowLeft',
+            'ArrowRight',
+            'ArrowUp',
+            'ArrowDown',
+            ',',
+            '.',
+            '<',
+            '>',
+            '[',
+            ']',
+          ].includes(e.key)
+        )
+          return;
         e.preventDefault();
         e.stopPropagation();
         const current = appStore.getState().candidateSplitFocus;
         const index =
           current?.candidateId === c.id ? current.index : initialCandidateSplitPoint(c.pts.length);
         if (index === null || index === undefined) return;
-        const direction = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1;
-        const next = stepCandidateSplitPoint(index, c.pts.length, direction, e.shiftKey ? 10 : 1);
+        const direction = ['ArrowLeft', 'ArrowUp', ',', '<', '['].includes(e.key) ? -1 : 1;
+        const amount = e.shiftKey || ['<', '>', '[', ']'].includes(e.key) ? 10 : 1;
+        const next = stepCandidateSplitPoint(index, c.pts.length, direction, amount);
         if (next !== null) setCandidateSplitFocus({ candidateId: c.id, index: next, moved: true });
       }}
       onClick={(e) => {

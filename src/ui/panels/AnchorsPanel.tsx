@@ -64,7 +64,10 @@ function AnchorRow({ anchor, n }: { anchor: Anchor; n: number }) {
   const loo = fit?.ok ? fit.looResiduals?.[anchor.id] : undefined;
   const plain = fit?.ok && fit.checked ? fit.residuals[anchor.id] : undefined;
   const residual = loo ?? plain;
-  const odd = fit?.ok ? anchorOutlier(fit, anchor.id) : false;
+  const cannotCheck = Boolean(
+    fit?.ok && !fit.checked && fit.anchorCount >= 4 && fit.requested !== 'similarity' && anchor.ll,
+  );
+  const odd = fit?.ok && fit.checked ? anchorOutlier(fit, anchor.id) : false;
   return (
     <li className={`anc${anchor.ll ? '' : ' empty'}${selected ? ' sel' : ''}`}>
       <span className="pin" aria-hidden="true">
@@ -103,12 +106,14 @@ function AnchorRow({ anchor, n }: { anchor: Anchor; n: number }) {
       <span
         className={odd ? 'res hi' : 'res'}
         title={
-          loo !== undefined
-            ? 'How far this anchor is from where the other anchors place it'
-            : 'Distance between where this anchor is and where the fit puts it'
+          cannotCheck
+            ? 'Not checked: add an anchor farther from the others to confirm this fit'
+            : loo !== undefined
+              ? 'How far this anchor is from where the other anchors place it'
+              : 'Distance between where this anchor is and where the fit puts it'
         }
       >
-        {residual !== undefined ? fmtRes(residual) : ''}
+        {cannotCheck ? '—' : residual !== undefined ? fmtRes(residual) : ''}
       </span>
       <button
         type="button"

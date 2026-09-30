@@ -3,6 +3,7 @@ import React, { useEffect, useState, type ReactNode } from 'react';
 import { sessionBridge } from '../../state/bridge';
 import type { Session, SessionBridge } from '../contract';
 import { OpenMapButton } from './OpenMapButton';
+import { StartSatelliteButton } from './StartSatelliteButton';
 import { ResumePrompt } from './ResumePrompt';
 
 void React;
@@ -62,6 +63,12 @@ export function EmptyState({
           label="Open image or PDF"
           showToast={showToast}
           setBusy={setBusy}
+        />
+        <StartSatelliteButton
+          id="startSatelliteBtnEmpty"
+          className="btn"
+          bridge={bridge}
+          showToast={showToast}
         />
         {resumeSlot !== undefined ? (
           resumeSlot ? (

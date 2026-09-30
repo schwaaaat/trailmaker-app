@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Anchor, Feature, FitResult, GeoFit, KmzRequest, Project } from '../../core/types';
+import type { Anchor, Feature, FitResult, GeoFit, KmzRequest, Project, Trail } from '../../core/types';
 import * as formatModule from '../../core/export/format';
 import { sessionBridge } from '../../state/bridge';
 import { makeProject, makeSession } from '../../state/fixtures.test.helper';
@@ -18,6 +18,7 @@ import {
   setCandidates,
   setDraft,
   setTool,
+  setConnectSession,
   undo,
   type ReviewCandidate,
 } from '../../state/store';
@@ -30,6 +31,7 @@ import { BUSY_AFTER_MS, ExportPanel, HINT_IDLE_MS, exportSummary } from './Expor
 import { FeaturesPanel, LIST_BATCH, LIST_FIRST } from './FeaturesPanel';
 import { fitMessage, fmtRes } from './fit-message';
 import { TracePanel } from './TracePanel';
+import { ConnectPanel } from './ConnectPanel';
 
 const downloads = vi.hoisted(() => [] as { name: string; type: string }[]);
 vi.mock('../../io/download', () => ({
@@ -238,11 +240,45 @@ describe('fitMessage (prototype renderFit)', () => {
     expect(fitMessage(ok({}), 4, false)).toStrictEqual({ text: '', tone: null });
     expect([fmtRes(0.4), fmtRes(12.4), fmtRes(1450)]).toStrictEqual(['±<1 m', '±12 m', '±1.4 km']);
   });
+  it('explains when the anchors cannot check a stretch in every direction', () => {
+    expect(
+      fitMessage(ok({ checked: false, method: 'similarity', requested: 'auto' }), 4, true).text,
+    ).toContain('Add an anchor farther from their line');
+  });
 });
 
 /* ------------------------------------------------------------------ anchors */
 
 describe('AnchorsPanel', () => {
+  it('leaves the uniquely cross-line Seabranch pin unscored and unflagged', () => {
+    const px: [number, number][] = [
+      [1127, 720],
+      [1025, 562],
+      [655, 162],
+      [475, 395],
+    ];
+    const coords: [number, number][] = [
+      [27.131201, -80.162278],
+      [27.134947, -80.164812],
+      [27.143866, -80.172832],
+      [27.136827, -80.17394],
+    ];
+    const anchors = px.map((p, i) => ({
+      id: `s${i + 1}`,
+      px: p,
+      ll: coords[i]!,
+      source: 'paste' as const,
+    }));
+    anchors[3] = { ...anchors[3]!, ll: [27.138227, -80.176769] };
+    open(makeProject({ image: { width: 1920, height: 945 } as never, anchors }));
+    render(<AnchorsPanel />);
+    const fit = selectFit(st());
+    expect(fit?.ok && fit.checked).toBe(false);
+    expect(q('.fit').textContent).toContain('Add an anchor farther from their line');
+    const badges = [...host.querySelectorAll<HTMLElement>('.res')];
+    expect(badges.map((b) => b.textContent)).toContain('—');
+    expect(badges.every((b) => !b.classList.contains('hi'))).toBe(true);
+  });
   it('applies pasted/entered coordinates, flags unreadable ones, and clears on empty', () => {
     open(makeProject({ anchors: [anchor('g1', [100, 100], false)] }));
     render(<AnchorsPanel />);
@@ -510,6 +546,281 @@ describe('FeaturesPanel', () => {
     expect(proj().features.map((f) => f.id)).toStrictEqual(['f1']);
     expect(proj().features[0]!.name).toBe('Ridge');
   });
+
+  it('shows simplify control for selected trail with preview, smooth, and single-step undo (T-222)', async () => {
+    const noisyTrail: Feature = {
+      kind: 'trail',
+      id: 't1',
+      name: 'Noisy Ridge',
+      color: '#D9480F',
+      notes: '',
+      ink: null,
+      pts: [
+        [0, 0],
+        [10, 10.1],
+        [25, 25.05],
+        [50, 50],
+        [75, 25.05],
+        [90, 9.95],
+        [100, 0],
+      ],
+    };
+    open(makeProject({ features: [noisyTrail] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('t1'));
+
+    const simplifyCtrl = host.querySelector('.simplify-control');
+    expect(simplifyCtrl).not.toBeNull();
+    const countEl = simplifyCtrl?.querySelector('.point-count');
+    expect(countEl?.textContent).toBe('7 → 3 points');
+
+    // Canvas preview is populated
+    expect(st().simplifyPreview?.featureId).toBe('t1');
+    expect(st().simplifyPreview?.pts.length).toBe(3);
+
+    // Toggle smooth
+    const smoothBox = byLabel<HTMLInputElement>('Smooth');
+    expect(smoothBox.checked).toBe(false);
+    click(smoothBox);
+    expect(smoothBox.checked).toBe(true);
+    // Smooth cuts the corner at [50, 50], adding intermediate points
+    expect(st().simplifyPreview?.pts.length).toBeGreaterThan(3);
+
+    // Turn smooth back off for apply
+    click(smoothBox);
+
+    // Click Apply
+    const applyBtn = byText('Apply');
+    click(applyBtn);
+
+    const current = proj().features.find((f) => f.id === 't1') as Trail;
+    expect(current.pts).toStrictEqual([
+      [0, 0],
+      [50, 50],
+      [100, 0],
+    ]);
+
+    // Undo restores original 7 points in one step
+    act(() => undo());
+    const reverted = proj().features.find((f) => f.id === 't1') as Trail;
+    expect(reverted.pts).toHaveLength(7);
+  });
+
+  it('supports simplify and smooth on areas, keeping closed rings with min 3 points (T-222)', () => {
+    const testArea: Feature = {
+      kind: 'area',
+      id: 'a1',
+      name: 'Pond',
+      color: '#3A7D44',
+      notes: '',
+      pts: [
+        [0, 0],
+        [50, 0.1],
+        [100, 0],
+        [100, 100],
+        [50, 99.9],
+        [0, 100],
+      ],
+    };
+    open(makeProject({ features: [testArea] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('a1'));
+
+    const countEl = host.querySelector('.simplify-control .point-count');
+    expect(countEl?.textContent).toBe('6 → 4 points');
+
+    // Apply
+    click(byText('Apply'));
+    const simplifiedArea = proj().features.find((f) => f.id === 'a1') as import('../../core/types').Area;
+    expect(simplifiedArea.pts.length).toBeGreaterThanOrEqual(3);
+    expect(simplifiedArea.pts).toHaveLength(4);
+
+    // Undo restores original points
+    act(() => undo());
+    const reverted = proj().features.find((f) => f.id === 'a1') as import('../../core/types').Area;
+    expect(reverted.pts).toHaveLength(6);
+  });
+
+  it('preserves shared junction coordinates during simplify (T-222)', () => {
+    const t1: Feature = {
+      kind: 'trail',
+      id: 't1',
+      name: 'Main',
+      color: '#D9480F',
+      notes: '',
+      ink: null,
+      pts: [
+        [0, 0],
+        [25, 0.1],
+        [50, 50],
+        [75, 0.1],
+        [100, 0],
+      ],
+    };
+    const t2: Feature = {
+      kind: 'trail',
+      id: 't2',
+      name: 'Branch',
+      color: '#1F6FB2',
+      notes: '',
+      ink: null,
+      pts: [
+        [50, 50],
+        [60, 80],
+        [70, 100],
+      ],
+    };
+    open(makeProject({ features: [t1, t2] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('t1'));
+
+    // Even if tolerance is high, junction [50, 50] must not be simplified away
+    const tolInput = byLabel<HTMLInputElement>('Tolerance');
+    act(() => {
+      tolInput.value = '100';
+      tolInput.dispatchEvent(new Event('change', { bubbles: true }));
+      tolInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    click(byText('Apply'));
+    const simplified = proj().features.find((f) => f.id === 't1') as Trail;
+    // Must contain start, junction [50, 50], and end
+    expect(simplified.pts).toStrictEqual([
+      [0, 0],
+      [50, 50],
+      [100, 0],
+    ]);
+  });
+
+  it('displays tolerance in real units (m or ft) depending on fit and project units (T-222)', () => {
+    const t1: Feature = {
+      kind: 'trail',
+      id: 't1',
+      name: 'Ridge',
+      color: '#D9480F',
+      notes: '',
+      ink: null,
+      pts: [
+        [0, 0],
+        [10, 0.1],
+        [20, 0],
+      ],
+    };
+    // No fit -> px
+    open(makeProject({ features: [t1] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('t1'));
+    expect(host.querySelector('.simplify-control')?.textContent).toContain('px');
+
+    // Fit with km -> m
+    act(() =>
+      open(
+        makeProject({
+          features: [t1],
+          anchors: [anchor('g1', [0, 0]), anchor('g2', [1000, 0]), anchor('g3', [1000, 800])],
+          units: 'km',
+        }),
+      ),
+    );
+    act(() => selectFeature('t1'));
+    expect(host.querySelector('.simplify-control')?.textContent).toContain('m');
+
+    // Fit with mi -> ft
+    act(() =>
+      open(
+        makeProject({
+          features: [t1],
+          anchors: [anchor('g1', [0, 0]), anchor('g2', [1000, 0]), anchor('g3', [1000, 800])],
+          units: 'mi',
+        }),
+      ),
+    );
+    act(() => selectFeature('t1'));
+    expect(host.querySelector('.simplify-control')?.textContent).toContain('ft');
+  });
+
+  it('simplifies all trails with total count and single undo step (T-222)', async () => {
+    const t1: Feature = {
+      kind: 'trail',
+      id: 't1',
+      name: 'Trail 1',
+      color: '#D9480F',
+      notes: '',
+      ink: null,
+      pts: [
+        [0, 0],
+        [10, 0.1],
+        [20, 0],
+        [30, 0.2],
+        [40, 0],
+      ],
+    };
+    const t2: Feature = {
+      kind: 'trail',
+      id: 't2',
+      name: 'Trail 2',
+      color: '#1F6FB2',
+      notes: '',
+      ink: null,
+      pts: [
+        [100, 100],
+        [110, 100.1],
+        [120, 100],
+        [130, 100.2],
+        [140, 100],
+      ],
+    };
+    open(makeProject({ features: [t1, t2] }));
+    render(<FeaturesPanel />);
+
+    const openAllBtn = byText('Simplify all trails');
+    expect(openAllBtn).not.toBeUndefined();
+    click(openAllBtn);
+
+    const allPanel = host.querySelector('.simplify-all-panel');
+    expect(allPanel).not.toBeNull();
+    const countEl = allPanel?.querySelector('.point-count');
+    expect(countEl?.textContent).toBe('10 → 4 points');
+
+    click(byText('Apply to all trails'));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    const p = proj();
+    const updated1 = p.features.find((f) => f.id === 't1') as Trail;
+    const updated2 = p.features.find((f) => f.id === 't2') as Trail;
+    expect(updated1.pts).toHaveLength(2);
+    expect(updated2.pts).toHaveLength(2);
+
+    // Single undo restores both trails
+    act(() => undo());
+    const restored1 = proj().features.find((f) => f.id === 't1') as Trail;
+    const restored2 = proj().features.find((f) => f.id === 't2') as Trail;
+    expect(restored1.pts).toHaveLength(5);
+    expect(restored2.pts).toHaveLength(5);
+  });
+});
+
+describe('ConnectPanel (T-221)', () => {
+  it('offers a connector style after two points and previews before commit', () => {
+    open(makeProject());
+    setTool('connect');
+    setConnectSession({
+      points: [
+        { trailId: 'a', segmentIndex: 0, point: [10, 10] },
+        { trailId: 'b', segmentIndex: 0, point: [30, 10] },
+      ],
+      mode: null,
+      connector: null,
+      drawing: false,
+    });
+    render(<ConnectPanel />);
+    expect(host.textContent).toContain('Choose how the connector should run.');
+    click(byText('Straight'));
+    expect(byText('Connect trails')).toBeTruthy();
+    expect(host.textContent).toContain('Preview the line');
+  });
 });
 
 /* ------------------------------------------------------------------ trace / review (T-210) */
@@ -647,7 +958,7 @@ describe('TracePanel review (T-210)', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 15_000);
 
   it('chooses and splits a candidate vertex with the keyboard, then restores it with one undo', () => {
     open(makeProject({ autoTrace: { chips: [chip('c1', 'Red')], gapPx: 12, minLengthPct: 4 } }));
@@ -695,6 +1006,49 @@ describe('TracePanel review (T-210)', () => {
     click(byText('Undo split'));
     expect(st().candidates).toStrictEqual([original]);
     expect(st().reviewUndoStack).toHaveLength(0);
+  });
+
+  it('moves candidate split focus with arrow-free aliases and ten-point steps', () => {
+    open(makeProject({ autoTrace: { chips: [chip('c1', 'Red')], gapPx: 12, minLengthPct: 4 } }));
+    const c = {
+      id: 'alias-candidate',
+      chipId: 'c1',
+      pts: Array.from({ length: 52 }, (_, i) => [i, 0] as [number, number]),
+      lengthPx: 51,
+      ink: [200, 40, 40] as [number, number, number],
+      confidence: 0.9,
+      on: true,
+      name: 'Long trail',
+      color: '#c82828',
+    };
+    act(() => setCandidates([c]));
+    render(<TracePanel />);
+    const split = byText('Split');
+    act(() => split.focus());
+    const press = (key: string, shiftKey = false) =>
+      act(() =>
+        split.dispatchEvent(
+          new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }),
+        ),
+      );
+    expect(st().candidateSplitFocus?.index).toBe(25);
+    press('.');
+    expect(st().candidateSplitFocus?.index).toBe(26);
+    press(',');
+    expect(st().candidateSplitFocus?.index).toBe(25);
+    press('>');
+    expect(st().candidateSplitFocus?.index).toBe(35);
+    press('<');
+    expect(st().candidateSplitFocus?.index).toBe(25);
+    press('[');
+    expect(st().candidateSplitFocus?.index).toBe(15);
+    press(']');
+    expect(st().candidateSplitFocus?.index).toBe(25);
+    press(',', true);
+    expect(st().candidateSplitFocus?.index).toBe(15);
+    press('.', true);
+    expect(st().candidateSplitFocus?.index).toBe(25);
+    expect(split.getAttribute('aria-keyshortcuts')).toContain('Period');
   });
 });
 

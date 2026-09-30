@@ -23,12 +23,20 @@ import { baseOf, type EditRefusal } from './commands';
 import { History } from './history';
 import type { CandidateSplitFocus } from './candidate-split-focus';
 import { clampVertexFocus, type VertexFocus } from './vertex-focus';
+import type { TrailPoint } from '../core/topology';
 
 export type { CandidateSplitFocus } from './candidate-split-focus';
 export type { VertexFocus } from './vertex-focus';
 
 /** Editor tools (prototype: select, gcp, trail, point, area, ink). */
-export type Tool = 'select' | 'anchor' | 'trail' | 'point' | 'area' | 'ink';
+export type Tool = 'select' | 'anchor' | 'trail' | 'point' | 'area' | 'ink' | 'connect';
+
+export interface ConnectSession {
+  readonly points: readonly TrailPoint[];
+  readonly mode: 'straight' | 'follow' | 'draw' | null;
+  readonly connector: readonly Px[] | null;
+  readonly drawing: boolean;
+}
 
 /** A trail or area being drawn. Not part of the undoable project (prototype `S.draft`). */
 export interface Draft {
@@ -108,6 +116,12 @@ export interface AppState {
   readonly selectedAnchorId: AnchorId | null;
   /** A second trail shift-clicked to arm "Join trails" (T-209), or null. */
   readonly secondSelectedFeatureId: FeatureId | null;
+  /** Touch join mode: the next tapped trail joins the selected trail (T-219). */
+  /** Optional so hand-built state fixtures in other lanes remain structurally valid. */
+  readonly joinArmed?: boolean;
+  /** Active panel in the narrow georeferencing stage, coordinated with Lane C (T-219/T-315). */
+  /** Optional so hand-built state fixtures in other lanes remain structurally valid. */
+  readonly stageView?: 'map' | 'basemap' | 'overlay';
   /** Right-click vertex menu (T-209), or null when closed. */
   readonly vertexMenu: VertexMenu | null;
   /** Keyboard vertex focus on the selected trail/area (T-215: Tab/arrows/Delete), or null. */
@@ -157,15 +171,21 @@ export interface AppState {
   readonly history: HistoryStatus;
   /** The keyboard shortcuts help dialog (T-215) is open. */
   readonly helpOpen: boolean;
+  /** Request to open satellite capture framing overlay (card T-318, D-031). */
+  readonly satelliteCaptureRequested?: boolean;
+  /** Live preview of a simplified/smoothed trail or area before Apply (T-222). */
+  readonly simplifyPreview?: { readonly featureId: FeatureId; readonly pts: readonly Px[] } | null;
   /**
    * The app-wide polite live region (T-215): undo/redo and vertex-focus changes, so screen
    * readers hear them without a visible toast. `id` changes on every announcement so repeating
    * the same text still gets read.
    */
   readonly announcement: { readonly id: number; readonly text: string } | null;
+  readonly connectSession?: ConnectSession | null;
 }
 
 const history = new History();
+export type HistoryCheckpoint = ReturnType<History['checkpoint']>;
 
 function historyStatus(): HistoryStatus {
   return {
@@ -183,6 +203,8 @@ const initialState: AppState = {
   selectedFeatureId: null,
   selectedAnchorId: null,
   secondSelectedFeatureId: null,
+  joinArmed: false,
+  stageView: 'map',
   vertexMenu: null,
   vertexFocus: null,
   keyboardMode: false,
@@ -203,7 +225,10 @@ const initialState: AppState = {
   candidateSplitFocus: null,
   history: historyStatus(),
   helpOpen: false,
+  satelliteCaptureRequested: false,
+  simplifyPreview: null,
   announcement: null,
+  connectSession: null,
 };
 
 /** The one app store. */
@@ -219,18 +244,23 @@ export function openSession(session: Session): void {
     selectedFeatureId: null,
     selectedAnchorId: null,
     secondSelectedFeatureId: null,
+    joinArmed: false,
+    stageView: 'map',
     vertexMenu: null,
     vertexFocus: null,
     draft: null,
     candidates: null,
     reviewUndoStack: [],
     candidateSplitFocus: null,
+    connectSession: null,
     busy: null,
     busyCancel: null,
     job: null,
     anchorDragging: false,
+    satelliteCaptureRequested: false,
     inkFor: null,
     lastInk: null,
+    simplifyPreview: null,
     history: historyStatus(),
   });
 }
@@ -272,6 +302,7 @@ function commitProject(project: Project, extra: Partial<AppState> = {}): void {
       : null,
     vertexMenu: null,
     vertexFocus: clampedFocus && clampedFocus.featureId === resolvedFeatureId ? clampedFocus : null,
+    simplifyPreview: null,
     history: historyStatus(),
   });
 }
@@ -334,12 +365,31 @@ export function sealHistory(): void {
   history.seal();
 }
 
+/** Snapshot undo and redo state before a gesture whose continuation may be cancelled. */
+export function checkpointHistory(): HistoryCheckpoint {
+  return history.checkpoint();
+}
+
+/** Restore the project and exact history stacks after a drag turns into a pinch. */
+export function restoreCancelledDrag(project: Project, restoreHistory: HistoryCheckpoint): void {
+  if (!appStore.getState().session) return;
+  restoreHistory();
+  commitProject(project, { anchorDragging: false });
+}
+
 /* ---------------------------------------------------------------- UI state */
 
 /** Set the active tool; drawing tools are remembered as prevTool (the ink picker returns there). */
 export function setTool(tool: Tool): void {
   const draws = tool === 'trail' || tool === 'point' || tool === 'area';
-  appStore.setState(draws ? { tool, prevTool: tool } : { tool });
+  appStore.setState({
+    ...(draws ? { prevTool: tool } : {}),
+    tool,
+  });
+}
+
+export function setConnectSession(connectSession: ConnectSession | null): void {
+  appStore.setState({ connectSession });
 }
 
 let focusSeq = 0;
@@ -355,9 +405,38 @@ export function selectFeature(id: FeatureId | null): void {
   appStore.setState({
     selectedFeatureId: id,
     secondSelectedFeatureId: null,
+    joinArmed: false,
     vertexMenu: null,
     vertexFocus: null,
+    simplifyPreview: null,
   });
+}
+
+/** Set or clear the live simplify preview for a feature (T-222). */
+export function setSimplifyPreview(
+  preview: { readonly featureId: FeatureId; readonly pts: readonly Px[] } | null,
+): void {
+  appStore.setState({ simplifyPreview: preview });
+}
+
+/** Arm the touch join flow or clear it after the next map tap (T-219). */
+export function setJoinArmed(joinArmed: boolean): void {
+  appStore.setState({ joinArmed });
+}
+
+/** Choose a map, basemap or overlay pane in the narrow stage (T-219/T-315). */
+export function setStageView(stageView: NonNullable<AppState['stageView']>): void {
+  appStore.setState({ stageView });
+}
+
+/** Request opening satellite capture framing overlay (card T-318). */
+export function requestSatelliteCapture(requested = true): void {
+  appStore.setState({ satelliteCaptureRequested: requested });
+}
+
+/** Clear the satellite capture request flag (card T-318). */
+export function clearSatelliteCaptureRequest(): void {
+  appStore.setState({ satelliteCaptureRequested: false });
 }
 
 export function selectAnchor(id: AnchorId | null): void {
@@ -365,8 +444,8 @@ export function selectAnchor(id: AnchorId | null): void {
 }
 
 /**
- * Set (or with null, clear) keyboard vertex focus (T-215: Tab/arrows on the canvas). Announces
- * "Vertex n of m" through the live region when focus lands on a vertex; clearing it stays quiet
+ * Set (or with null, clear) keyboard vertex focus (T-215/T-223). Announces
+ * "Point n of m" through the live region when focus lands on a vertex; clearing it stays quiet
  * so leaving the canvas or deselecting doesn't spam the region.
  */
 export function setVertexFocus(focus: VertexFocus | null): void {
@@ -374,7 +453,7 @@ export function setVertexFocus(focus: VertexFocus | null): void {
   if (!focus) return;
   const f = appStore.getState().session?.project.features.find((x) => x.id === focus.featureId);
   const n = f && f.kind !== 'poi' ? f.pts.length : 0;
-  if (n) announce(`Vertex ${focus.index + 1} of ${n}`);
+  if (n) announce(`Point ${focus.index + 1} of ${n}`);
 }
 
 /** T-215: a keydown the tools recognise sets this; a canvas click or drag clears it. */

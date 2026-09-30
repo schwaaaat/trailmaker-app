@@ -30,8 +30,8 @@ function render(node: React.ReactNode) {
   act(() => root.render(node));
 }
 const byText = (text: string) =>
-  [...host.querySelectorAll<HTMLButtonElement>('button')].find(
-    (b) => b.textContent?.trim() === text,
+  [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+    b.textContent?.trim().startsWith(text),
   );
 const click = (el: HTMLElement) => act(() => el.click());
 
@@ -69,6 +69,17 @@ describe('VertexMenu (T-209)', () => {
     expect(byText('Delete point')).toBeTruthy();
   });
 
+  it('shows the keyboard key for each menu action', () => {
+    act(() =>
+      openVertexMenu({ featureId: 'f1', index: 1, canSplit: true, client: { x: 10, y: 20 } }),
+    );
+    render(<VertexMenu />);
+    expect(host.querySelector('[aria-keyshortcuts="S"]')?.textContent).toContain('S');
+    expect(host.querySelector('[aria-keyshortcuts="Delete Backspace"]')?.textContent).toContain(
+      'Delete / Backspace',
+    );
+  });
+
   it('"Split here" splits the trail and closes the menu', () => {
     act(() =>
       openVertexMenu({ featureId: 'f1', index: 1, canSplit: true, client: { x: 10, y: 20 } }),
@@ -78,6 +89,25 @@ describe('VertexMenu (T-209)', () => {
     const p = appStore.getState().session!.project;
     expect(p.features.map((f) => f.id)).toStrictEqual(['f1', 'f5']);
     expect(appStore.getState().selectedFeatureId).toBe('f5');
+    expect(appStore.getState().vertexMenu).toBeNull();
+  });
+
+  it('the focused menu action responds to its displayed key', () => {
+    act(() =>
+      openVertexMenu({ featureId: 'f1', index: 1, canSplit: true, client: { x: 10, y: 20 } }),
+    );
+    render(<VertexMenu />);
+    const split = byText('Split here')!;
+    act(() => {
+      split.focus();
+      split.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 's', bubbles: true, cancelable: true }),
+      );
+    });
+    expect(appStore.getState().session!.project.features.map((f) => f.id)).toStrictEqual([
+      'f1',
+      'f5',
+    ]);
     expect(appStore.getState().vertexMenu).toBeNull();
   });
 

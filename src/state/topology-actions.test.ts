@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Feature, Px } from '../core/types';
 import { makeProject, makeSession } from './fixtures.test.helper';
-import { appStore, openSession, selectFeature, selectSecondFeature } from './store';
+import { appStore, openSession, selectFeature, selectSecondFeature, redo, undo } from './store';
 import {
   canSplitAt,
   cleanupJunctions,
@@ -9,6 +9,7 @@ import {
   CLEANUP_TOLERANCE_MAX_PX,
   CLEANUP_TOLERANCE_MIN_PX,
   countSnappedEnds,
+  connectSelectedPoints,
   joinSelected,
   needsCleanup,
   splitHere,
@@ -79,13 +80,30 @@ describe('countSnappedEnds', () => {
       ]),
     ];
     // f1 unchanged, f2's start moved but its end (and everything else) did not.
-    const updated = [before[0]!, trail('f2', [[10, 0], [20, 0]])];
+    const updated = [
+      before[0]!,
+      trail('f2', [
+        [10, 0],
+        [20, 0],
+      ]),
+    ];
     expect(countSnappedEnds(before, updated)).toBe(1);
   });
 
   it('does not count a trail that only gained a mid-line junction vertex', () => {
-    const before = [trail('f1', [[0, 0], [20, 0]])];
-    const updated = [trail('f1', [[0, 0], [10, 0], [20, 0]])];
+    const before = [
+      trail('f1', [
+        [0, 0],
+        [20, 0],
+      ]),
+    ];
+    const updated = [
+      trail('f1', [
+        [0, 0],
+        [10, 0],
+        [20, 0],
+      ]),
+    ];
     expect(countSnappedEnds(before, updated)).toBe(0);
   });
 });
@@ -114,7 +132,17 @@ describe('splitHere', () => {
 
   it('does nothing for an endpoint or a missing feature', () => {
     openSession(
-      makeSession(makeProject({ features: [trail('f1', [[0, 0], [10, 0], [20, 0]])] })),
+      makeSession(
+        makeProject({
+          features: [
+            trail('f1', [
+              [0, 0],
+              [10, 0],
+              [20, 0],
+            ]),
+          ],
+        }),
+      ),
     );
     splitHere('f1', 0);
     expect(proj().features).toHaveLength(1);
@@ -150,11 +178,52 @@ describe('joinSelected', () => {
 
   it('does nothing without two distinct selected trails', () => {
     openSession(
-      makeSession(makeProject({ features: [trail('f1', [[0, 0], [10, 0]])] })),
+      makeSession(
+        makeProject({
+          features: [
+            trail('f1', [
+              [0, 0],
+              [10, 0],
+            ]),
+          ],
+        }),
+      ),
     );
     selectFeature('f1');
     joinSelected(); // no second selection
     expect(proj().features).toHaveLength(1);
+  });
+});
+
+describe('connectSelectedPoints', () => {
+  it('inserts both junctions and the connector in one undo/redo step', () => {
+    const original = [
+      trail('f1', [
+        [0, 0],
+        [10, 0],
+      ]),
+      trail('f2', [
+        [0, 5],
+        [10, 5],
+      ]),
+    ];
+    openSession(makeSession(makeProject({ seq: 5, features: original })));
+    expect(
+      connectSelectedPoints(
+        { trailId: 'f1', segmentIndex: 0, point: [5, 0] },
+        { trailId: 'f2', segmentIndex: 0, point: [5, 5] },
+        [
+          [5, 0],
+          [5, 5],
+        ],
+      ),
+    ).toBe(true);
+    expect(proj().features.map((f) => f.id)).toEqual(['f1', 'f2', 'f5']);
+    expect(appStore.getState().history.undoLabel).toBe('Connect trails');
+    expect(undo()).toBe(true);
+    expect(proj().features).toEqual(original);
+    expect(redo()).toBe(true);
+    expect(proj().features.map((f) => f.id)).toEqual(['f1', 'f2', 'f5']);
   });
 });
 

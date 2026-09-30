@@ -7,7 +7,8 @@
 // Draft operations run through one queue because a hop may be async (T-206 smart follow).
 import { featureColorForInk } from '../../core/trace/color';
 import { simplify } from '../../core/trace/simplify';
-import { DEFAULT_COLORS, type Px, type Rgb } from '../../core/types';
+import { projectTrailPoint, type TrailPoint } from '../../core/topology';
+import { DEFAULT_COLORS, type Project, type Px, type Rgb } from '../../core/types';
 import {
   addAnchor,
   addFeature,
@@ -19,10 +20,12 @@ import {
 } from '../../state/commands';
 import {
   appStore,
+  checkpointHistory,
   edit,
   openVertexMenu,
   redo,
   requestFocus,
+  restoreCancelledDrag,
   sealHistory,
   selectAnchor,
   selectFeature,
@@ -31,17 +34,20 @@ import {
   setCandidateOn,
   setDraft,
   setHelpOpen,
+  setJoinArmed,
   setKeyboardMode,
+  setConnectSession,
   setTool,
   setVertexFocus,
   showToast,
   undo,
   undoCandidateSplit,
   type Draft,
+  type HistoryCheckpoint,
   type Tool,
 } from '../../state/store';
 import { canSplitAt, joinSelected, splitHere } from '../../state/topology-actions';
-import { stepCount, stepVertexFocus } from '../../state/vertex-focus';
+import { moveVertexFocus, stepCount, stepVertexFocus } from '../../state/vertex-focus';
 import { splitReviewedCandidate } from '../panels/candidate-split';
 import type { DragTarget, Editor, EditorEvents, HopProvider, PointerAt } from './Editor';
 import { isCancelled, isReported } from '../../state/worker-link';
@@ -60,7 +66,7 @@ export const TIPS = {
   cands:
     'Click a found line to include or leave it out, then add the selected lines as trails in the sidebar.',
   select:
-    'Click a trail or point to edit it. Drag anchors or trail vertices to adjust. Right-click a vertex for more (delete, split). Shift-click a second trail, then press J, to join them. Drag the map to pan, scroll to zoom.',
+    'Tap a point on the trail to select it (or press , / . to move between points). Then press S or pick Split here in the point’s menu. Right-click or long-press a point for its menu.',
   anchor:
     'Click a spot you can find on a real map: a trailhead, a junction, a parking lot corner. Then paste its coordinates in the sidebar.',
   trailSmart:
@@ -70,7 +76,21 @@ export const TIPS = {
   point: 'Click to drop a point of interest, then name it and choose a type.',
   area: 'Click around the edge of an area. Click the first point or press Enter to close it.',
   ink: 'Click the trail line whose color you want to follow.',
+  connect:
+    'Choose a point on one trail, then a point on another. Pick a connector style in the sidebar. Escape cancels.',
 } as const;
+
+const TOUCH_TIPS: Record<Tool | 'trailSmart' | 'cands', string> = {
+  cands: 'Tap a found line to include or leave it out, then add the selected lines in the sidebar.',
+  select: 'Select trail. Tap a point or use , / .; press S or Split here. Long-press for its menu.',
+  anchor: 'Tap a spot you can find on a real map, then paste its coordinates in the sidebar.',
+  trailSmart: 'Tap a trail line, then tap further along it. The path follows its color.',
+  trail: 'Tap to add points along the trail. Tap the last point again or use Finish trail.',
+  point: 'Tap to drop a point of interest, then name it and choose a type.',
+  area: 'Tap around the edge of an area. Tap the first point or use Close area.',
+  ink: 'Tap the trail line whose color you want to follow.',
+  connect: 'Tap a point on each trail, then choose how to connect them in the sidebar.',
+};
 
 /** The tip for the current state, or '' without a map. */
 export function tipFor(s: {
@@ -78,8 +98,14 @@ export function tipFor(s: {
   tool: Tool;
   smartFollow: boolean;
   reviewing: boolean;
+  coarsePointer?: boolean;
 }): string {
   if (!s.hasMap) return '';
+  if (s.coarsePointer) {
+    if (s.reviewing && s.tool === 'select') return TOUCH_TIPS.cands;
+    if (s.tool === 'trail') return TOUCH_TIPS[s.smartFollow ? 'trailSmart' : 'trail'];
+    return TOUCH_TIPS[s.tool];
+  }
   if (s.reviewing && s.tool === 'select') return TIPS.cands;
   if (s.tool === 'trail') return s.smartFollow ? TIPS.trailSmart : TIPS.trail;
   return TIPS[s.tool];
@@ -333,6 +359,10 @@ export type KeyAction =
    * releases focus instead, so plain Tab is left for the browser to move on. */
   | 'focusNextVertex'
   | 'focusPrevVertex'
+  | 'stepFocusNextVertex'
+  | 'stepFocusPrevVertex'
+  | 'stepFocusNextVertex10'
+  | 'stepFocusPrevVertex10'
   | 'releaseVertexFocus'
   | 'nudgeUp'
   | 'nudgeDown'
@@ -344,6 +374,8 @@ export type KeyAction =
   | 'panLeft'
   | 'panRight'
   | 'placeAtCenter'
+  | 'cancelConnect'
+  | 'connectFocusedPoint'
   | { readonly tool: Tool };
 
 export interface KeyInput {
@@ -378,6 +410,8 @@ export interface KeyContext {
   /** Enter with no draft open: the select tool places nothing; anchor, point, trail and area
    * place (or start tracing) one at the view centre instead (T-215). */
   readonly canPlaceAtCenter: boolean;
+  /** A connect session can switch to Select so keyboard users can focus another trail. */
+  readonly hasConnectSession?: boolean;
   /** The last canvas input was a key, not a pointer (T-215's store field of the same name).
    * While drafting, this is what tells Enter to add a point at the view centre instead of
    * finishing outright: a mouse-drafted trail still finishes on Enter as it always has. */
@@ -390,6 +424,7 @@ const TOOL_KEYS: Readonly<Record<string, Tool>> = {
   t: 'trail',
   p: 'point',
   r: 'area',
+  c: 'connect',
 };
 
 /** The shortcut table (prototype keyboard handler, extended by T-215). Null means "not ours;
@@ -405,7 +440,13 @@ export function keyAction(e: KeyInput, c: KeyContext): KeyAction | null {
   if (e.targetTag === 'BUTTON' && (k === 'enter' || k === ' ')) return null;
   if (e.ctrlKey || e.metaKey) {
     if (k === 'z') {
-      return e.shiftKey ? 'redo' : c.drafting ? 'draftUndo' : c.reviewCanUndo ? 'undoSplit' : 'undo';
+      return e.shiftKey
+        ? 'redo'
+        : c.drafting
+          ? 'draftUndo'
+          : c.reviewCanUndo
+            ? 'undoSplit'
+            : 'undo';
     }
     if (k === 'y' && e.ctrlKey && !e.shiftKey) return 'redo';
     return null;
@@ -413,6 +454,14 @@ export function keyAction(e: KeyInput, c: KeyContext): KeyAction | null {
   if (e.altKey) return null;
   if (k === 'tab' && e.targetIsCanvas && c.tool === 'select' && c.canFocusVertices) {
     return e.shiftKey ? 'focusPrevVertex' : 'focusNextVertex';
+  }
+  if (e.targetIsCanvas && c.tool === 'select' && c.canFocusVertices) {
+    if (k === ',' || k === '<')
+      return k === '<' || e.shiftKey ? 'stepFocusPrevVertex10' : 'stepFocusPrevVertex';
+    if (k === '.' || k === '>')
+      return k === '>' || e.shiftKey ? 'stepFocusNextVertex10' : 'stepFocusNextVertex';
+    if (k === '[') return 'stepFocusPrevVertex10';
+    if (k === ']') return 'stepFocusNextVertex10';
   }
   // Arrows pan even while drafting (T-215 review: panning is how a keyboard user moves the
   // centre crosshair to the next point). Vertex focus never coexists with an open draft (it's
@@ -432,10 +481,12 @@ export function keyAction(e: KeyInput, c: KeyContext): KeyAction | null {
   }
   if (k === 'enter') {
     if (c.drafting) return c.keyboardMode ? 'placeAtCenter' : 'finish';
+    if (c.tool === 'connect' && c.hasVertexFocus) return 'connectFocusedPoint';
     return c.canPlaceAtCenter ? 'placeAtCenter' : null;
   }
   if (k === 'escape') {
     if (c.drafting) return 'cancel';
+    if (c.tool === 'connect' || c.hasConnectSession) return 'cancelConnect';
     if (c.hasVertexFocus) return 'releaseVertexFocus';
     return c.tool === 'ink' ? 'exitInk' : 'deselect';
   }
@@ -499,6 +550,10 @@ const PAN_DELTA: Readonly<
 /** Wires one Editor's events and the window's keys to the tool behavior. */
 export class Tools {
   private readonly offs: (() => void)[] = [];
+  private dragCheckpoint: {
+    readonly project: Project;
+    readonly history: HistoryCheckpoint;
+  } | null = null;
   /** Last known pointer position on the canvas, for the S (split here) shortcut. */
   private hoverScreen: Screen | null = null;
 
@@ -515,8 +570,9 @@ export class Tools {
       editor.on('pointerdown', () => setKeyboardMode(false)),
     );
     const onKey = (e: KeyboardEvent) => this.onKey(e);
-    window.addEventListener('keydown', onKey);
-    this.offs.push(() => window.removeEventListener('keydown', onKey));
+    // Capture Escape and tool keys before a focused panel or toolbar button can consume them.
+    window.addEventListener('keydown', onKey, true);
+    this.offs.push(() => window.removeEventListener('keydown', onKey, true));
   }
 
   destroy(): void {
@@ -568,6 +624,14 @@ export class Tools {
           }
         }
         const hit = hitFeature(p.features, this.editor.view, e.screen);
+        if (s.joinArmed) {
+          setJoinArmed(false);
+          if (hit?.kind === 'trail' && s.selectedFeatureId && hit.id !== s.selectedFeatureId) {
+            selectSecondFeature(hit.id);
+            joinSelected();
+            return;
+          }
+        }
         // Shift-click a second, different trail while one is already selected: arm "Join trails"
         // (T-209). Any other shift-click falls through to a plain select, which drops the arm.
         if (e.shiftKey && hit?.kind === 'trail' && s.selectedFeatureId) {
@@ -594,6 +658,55 @@ export class Tools {
         this.addPointAt(p, e.px);
         return;
       }
+      case 'connect': {
+        const connect = s.connectSession ?? {
+          points: [],
+          mode: null,
+          connector: null,
+          drawing: false,
+        };
+        if (connect.mode === 'draw' && connect.drawing && connect.points.length === 2) {
+          if (!e.inside) return;
+          const path = connect.connector ?? [connect.points[0]!.point, connect.points[1]!.point];
+          setConnectSession({
+            ...connect,
+            connector: [...path.slice(0, -1), e.px, path[path.length - 1]!],
+          });
+          return;
+        }
+        if (connect.mode) return;
+        if (!e.inside) return;
+        const target = e.target?.kind === 'vertex' ? e.target : null;
+        const hit = target
+          ? p.features.find((f) => f.id === target.featureId)
+          : hitFeature(p.features, this.editor.view, e.screen);
+        if (!hit || hit.kind !== 'trail') {
+          showToast('Choose a point on a trail');
+          return;
+        }
+        const point: TrailPoint =
+          target && target.featureId === hit.id
+            ? {
+                trailId: hit.id,
+                segmentIndex: Math.min(target.index, hit.pts.length - 2),
+                point: hit.pts[target.index]!,
+              }
+            : projectTrailPoint(hit, e.px);
+        if (!connect.points.length) {
+          setConnectSession({ points: [point], mode: null, connector: null, drawing: false });
+          return;
+        }
+        const first = connect.points[0]!;
+        if (
+          Math.hypot(first.point[0] - point.point[0], first.point[1] - point.point[1]) <
+          8 / this.editor.view.s
+        ) {
+          showToast('Choose points farther apart');
+          return;
+        }
+        setConnectSession({ points: [first, point], mode: null, connector: null, drawing: false });
+        return;
+      }
       case 'trail':
       case 'area':
         // A new click supersedes the hop still tracing (acceptance: hops are cancellable).
@@ -607,13 +720,23 @@ export class Tools {
   }
 
   private onDrag(
-    e: PointerAt & { readonly target: DragTarget },
+    e: PointerAt & { readonly target: DragTarget; readonly cancelled?: boolean },
     phase: 'start' | 'move' | 'end',
   ): void {
     const p = project();
     if (!p) return;
+    if (phase === 'end' && e.cancelled) {
+      if (this.dragCheckpoint) {
+        restoreCancelledDrag(this.dragCheckpoint.project, this.dragCheckpoint.history);
+        this.dragCheckpoint = null;
+      } else if (e.target.kind === 'anchor') {
+        setAnchorDragging(false);
+      }
+      return;
+    }
     // One undo step per drag: never merge into an earlier edit with the same key.
     if (phase === 'start') {
+      this.dragCheckpoint = { project: p, history: checkpointHistory() };
       sealHistory();
       if (e.target.kind === 'anchor') {
         selectAnchor(e.target.id);
@@ -629,6 +752,7 @@ export class Tools {
     }
     if (phase === 'end') {
       sealHistory();
+      this.dragCheckpoint = null;
       if (t.kind === 'anchor') setAnchorDragging(false);
     }
   }
@@ -700,6 +824,7 @@ export class Tools {
         canPlaceAtCenter:
           !s.draft &&
           (s.tool === 'anchor' || s.tool === 'point' || s.tool === 'trail' || s.tool === 'area'),
+        hasConnectSession: s.connectSession !== null,
         keyboardMode: s.keyboardMode,
       },
     );
@@ -710,6 +835,40 @@ export class Tools {
       return;
     }
     switch (action) {
+      case 'cancelConnect':
+        e.stopPropagation();
+        this.editor.hopProvider?.cancel?.();
+        setConnectSession(null);
+        return;
+      case 'connectFocusedPoint': {
+        const trail = selected;
+        if (!trail || trail.kind !== 'trail' || focusedIndex < 0) return;
+        const segmentIndex = Math.min(focusedIndex, trail.pts.length - 2);
+        const point: TrailPoint = {
+          trailId: trail.id,
+          segmentIndex,
+          point: trail.pts[focusedIndex]!,
+        };
+        const existing = state().connectSession;
+        if (!existing?.points.length)
+          setConnectSession({ points: [point], mode: null, connector: null, drawing: false });
+        else if (
+          Math.hypot(
+            existing.points[0]!.point[0] - point.point[0],
+            existing.points[0]!.point[1] - point.point[1],
+          ) >=
+          8 / this.editor.view.s
+        ) {
+          setConnectSession({
+            ...existing,
+            points: [existing.points[0]!, point],
+            mode: null,
+            connector: null,
+            drawing: false,
+          });
+        }
+        return;
+      }
       case 'undo':
         undo();
         return;
@@ -765,10 +924,30 @@ export class Tools {
         setKeyboardMode(true);
         setVertexFocus(stepVertexFocus(focus, selected, 1));
         return;
+      case 'stepFocusNextVertex':
+        sealHistory();
+        setKeyboardMode(true);
+        setVertexFocus(moveVertexFocus(focus, selected, 1));
+        return;
+      case 'stepFocusNextVertex10':
+        sealHistory();
+        setKeyboardMode(true);
+        setVertexFocus(moveVertexFocus(focus, selected, 1, 10));
+        return;
       case 'focusPrevVertex':
         sealHistory();
         setKeyboardMode(true);
         setVertexFocus(stepVertexFocus(focus, selected, -1));
+        return;
+      case 'stepFocusPrevVertex':
+        sealHistory();
+        setKeyboardMode(true);
+        setVertexFocus(moveVertexFocus(focus, selected, -1));
+        return;
+      case 'stepFocusPrevVertex10':
+        sealHistory();
+        setKeyboardMode(true);
+        setVertexFocus(moveVertexFocus(focus, selected, -1, 10));
         return;
       case 'releaseVertexFocus':
         sealHistory();

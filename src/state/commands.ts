@@ -371,6 +371,40 @@ export function acceptCandidates(
   return { command, id: added.map((f) => f.id) };
 }
 
+/**
+ * Update one feature's points (e.g. from Simplify or Smooth, T-222). Undoes as one step.
+ */
+export function setFeaturePoints(
+  p: Project,
+  id: FeatureId,
+  pts: readonly Px[],
+  label = 'Simplify feature',
+): HistoryCommand {
+  const f = p.features[indexById(p.features, id, 'Feature')]!;
+  if (f.kind === 'poi') throw new Error(`Feature ${id} is a point, cannot simplify points`);
+  return replaceFeature(p, label, null, { ...f, pts });
+}
+
+/**
+ * Replace multiple features with their simplified/smoothed versions as one undoable step (T-222).
+ */
+export function simplifyFeatures(
+  p: Project,
+  updated: readonly Feature[],
+  label = 'Simplify all trails',
+): HistoryCommand {
+  const prevFeatures = p.features;
+  const updateMap = new Map(updated.map((f) => [f.id, f]));
+  const features = prevFeatures.map((f) => updateMap.get(f.id) ?? f);
+  return makeCommand(
+    p,
+    label,
+    null,
+    (q) => ({ ...q, features }),
+    (q) => ({ ...q, features: prevFeatures }),
+  );
+}
+
 /* ---------------------------------------------------------------- topology (T-209) */
 
 /**
@@ -380,7 +414,11 @@ export function acceptCandidates(
  * second half lands next to the original, not at the end of the list). The revert snapshots
  * `p.features` directly, so it is exact by construction.
  */
-export function applyTopologyEdit(p: Project, e: TopologyEdit): HistoryCommand {
+export function applyTopologyEdit(
+  p: Project,
+  e: TopologyEdit,
+  labelOverride?: string,
+): HistoryCommand {
   const prevFeatures = p.features;
   let features = prevFeatures.filter((f) => !e.removed.includes(f.id));
   let insertAfter = -1;
@@ -395,7 +433,9 @@ export function applyTopologyEdit(p: Project, e: TopologyEdit): HistoryCommand {
     }
   }
   const newIds = e.updated.filter((u) => !prevFeatures.some((f) => f.id === u.id)).length;
-  const label = e.removed.length ? 'Join trails' : newIds > 0 ? 'Split trail' : 'Clean up junctions';
+  const label =
+    labelOverride ??
+    (e.removed.length ? 'Join trails' : newIds > 0 ? 'Split trail' : 'Clean up junctions');
   return makeCommand(
     p,
     label,

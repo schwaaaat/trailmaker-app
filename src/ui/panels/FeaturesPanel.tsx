@@ -2,7 +2,7 @@
 // Lane B. Feature list, feature editor and draft bar (card T-205): the prototype's renderDraft,
 // renderFeatures and renderEditor. Every edit is a command; typing coalesces into one undo step
 // and is sealed on blur.
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { formatLength, normalizeColor } from '../../core/export/format';
 import {
   DEFAULT_COLORS,
@@ -10,9 +10,16 @@ import {
   type Feature,
   type GeoFit,
   type PoiType,
+  type Trail,
   type Units,
 } from '../../core/types';
-import { deleteFeature, reverseTrail, updateFeature } from '../../state/commands';
+import {
+  deleteFeature,
+  reverseTrail,
+  setFeaturePoints,
+  simplifyFeatures,
+  updateFeature,
+} from '../../state/commands';
 import { useApp, useFit } from '../../state/hooks';
 import {
   appStore,
@@ -20,16 +27,21 @@ import {
   sealHistory,
   selectFeature,
   selectSecondFeature,
+  setJoinArmed,
+  setSimplifyPreview,
   showToast,
 } from '../../state/store';
 import { cleanupJunctions, cleanupTolerancePx, joinSelected } from '../../state/topology-actions';
+import { findJunctionCoordinates, simplifyFeature, simplifyFeaturesSteps } from '../../core/trace/simplify';
 import { currentEditor } from '../editor/EditorStage';
+import { runSliced } from '../editor/slice';
 import { cancelDraft, continueTrail, draftUndo, finishDraft } from '../editor/tools';
 import { toScr } from '../editor/view';
 import { cachedFeatureLengthM, fillFeatureLengths } from './lengths';
 
 const project = () => appStore.getState().session?.project ?? null;
 const ORDER = { trail: 0, area: 1, poi: 2 } as const;
+const EMPTY_FEATURES: readonly Feature[] = [];
 
 function DraftBar() {
   const draft = useApp((s) => s.draft);
@@ -240,6 +252,7 @@ function FeatureEditor() {
     (s) =>
       s.session?.project.features.find((x) => x.id === s.secondSelectedFeatureId)?.name ?? null,
   );
+  const joinArmed = useApp((s) => s.joinArmed);
   const focus = useApp((s) => s.focusRequest);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -307,9 +320,21 @@ function FeatureEditor() {
       {secondName ? (
         <p className="hint">Shift-selected “{secondName}” to join with this trail.</p>
       ) : null}
+      {joinArmed ? (
+        <p className="hint touch-join-status">Tap another trail on the map to join it.</p>
+      ) : null}
+      {f.kind === 'trail' || f.kind === 'area' ? <SimplifyControl f={f} /> : null}
       <div className="row">
         {f.kind === 'trail' ? (
           <>
+            <button
+              type="button"
+              className="btn small touch-only"
+              aria-pressed={joinArmed}
+              onClick={() => setJoinArmed(!joinArmed)}
+            >
+              Join with…
+            </button>
             <button type="button" className="btn small" onClick={() => void continueTrail(f.id)}>
               Continue tracing
             </button>
@@ -353,6 +378,300 @@ function FeatureEditor() {
   );
 }
 
+function SimplifyControl({ f }: { f: Extract<Feature, { kind: 'trail' | 'area' }> }) {
+  const units = useApp((s) => s.session?.project.units ?? 'mi');
+  const features = useApp((s) => s.session?.project.features ?? EMPTY_FEATURES);
+  const result = useFit();
+  const fit = result?.ok ? result : null;
+  const junctions = useMemo(() => findJunctionCoordinates(features), [features]);
+
+  const mpp = fit?.metersPerPixel;
+  const unitLabel = fit ? (units === 'km' ? 'm' : 'ft') : 'px';
+
+  const { min, max, step, defaultVal, toPx } = useMemo(() => {
+    if (fit && mpp) {
+      if (units === 'km') {
+        const d = Math.max(0.5, Math.round(mpp * 1.5 * 10) / 10);
+        return {
+          min: 0,
+          max: Math.max(20, Math.round(mpp * 30)),
+          step: Math.max(0.1, Math.round(mpp * 0.1 * 10) / 10),
+          defaultVal: d,
+          toPx: (val: number) => val / mpp,
+        };
+      } else {
+        const ftPerPx = mpp / 0.3048;
+        const d = Math.max(1, Math.round(ftPerPx * 1.5));
+        return {
+          min: 0,
+          max: Math.max(60, Math.round(ftPerPx * 30)),
+          step: Math.max(0.5, Math.round(ftPerPx * 0.2 * 2) / 2),
+          defaultVal: d,
+          toPx: (val: number) => (val * 0.3048) / mpp,
+        };
+      }
+    }
+    return {
+      min: 0,
+      max: 30,
+      step: 0.5,
+      defaultVal: 1,
+      toPx: (val: number) => val,
+    };
+  }, [fit, mpp, units]);
+
+  const [tolerance, setTolerance] = useState(defaultVal);
+  const [smooth, setSmooth] = useState(false);
+
+  const prevUnitLabelRef = useRef(unitLabel);
+  useEffect(() => {
+    if (prevUnitLabelRef.current !== unitLabel) {
+      prevUnitLabelRef.current = unitLabel;
+      setTolerance(defaultVal);
+    }
+  }, [unitLabel, defaultVal]);
+
+  const tolerancePx = toPx(tolerance);
+  const simplified = useMemo(
+    () => simplifyFeature(f, tolerancePx, smooth, junctions),
+    [f, tolerancePx, smooth, junctions],
+  );
+
+  useEffect(() => {
+    setSimplifyPreview({ featureId: f.id, pts: simplified.pts });
+    return () => {
+      setSimplifyPreview(null);
+    };
+  }, [f.id, simplified.pts]);
+
+  const beforeCount = f.pts.length;
+  const afterCount = simplified.pts.length;
+
+  const trails = useMemo(
+    () => features.filter((feat): feat is Trail => feat.kind === 'trail'),
+    [features],
+  );
+  const isTrail = f.kind === 'trail';
+  const hasMultipleTrails = trails.length > 1;
+
+  const allTrailsBefore = useMemo(
+    () => trails.reduce((sum, t) => sum + t.pts.length, 0),
+    [trails],
+  );
+  const allTrailsAfter = useMemo(() => {
+    if (!hasMultipleTrails) return afterCount;
+    return trails.reduce((sum, t) => {
+      const s = t.id === f.id ? simplified : simplifyFeature(t, tolerancePx, smooth, junctions);
+      return sum + s.pts.length;
+    }, 0);
+  }, [hasMultipleTrails, trails, f.id, simplified, tolerancePx, smooth, junctions, afterCount]);
+
+  const [busy, setBusy] = useState(false);
+
+  const applySingle = () => {
+    const proj = project();
+    if (!proj) return;
+    setSimplifyPreview(null);
+    edit(setFeaturePoints(proj, f.id, simplified.pts, smooth ? `Smooth ${f.kind}` : `Simplify ${f.kind}`));
+    sealHistory();
+    showToast(`Applied to ${f.name}`);
+  };
+
+  const applyAll = async () => {
+    const proj = project();
+    if (!proj) return;
+    setBusy(true);
+    setSimplifyPreview(null);
+    try {
+      const updated = await runSliced(simplifyFeaturesSteps(trails, tolerancePx, smooth));
+      edit(simplifyFeatures(proj, updated));
+      sealHistory();
+      showToast(`Simplified ${updated.length} trails`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="simplify-control" role="group" aria-label="Simplify">
+      <div className="simplify-header">
+        <b>Simplify</b>
+      </div>
+      <label className="field">
+        <span>Tolerance: {tolerance} {unitLabel}</span>
+        <input
+          type="range"
+          aria-label="Tolerance"
+          min={min}
+          max={max}
+          step={step}
+          value={tolerance}
+          onChange={(e) => setTolerance(parseFloat(e.target.value))}
+        />
+      </label>
+      <label className="chk">
+        <input
+          type="checkbox"
+          aria-label="Smooth"
+          checked={smooth}
+          onChange={(e) => setSmooth(e.target.checked)}
+        />
+        <span>Smooth</span>
+      </label>
+      <div className="point-count" aria-live="polite">
+        {beforeCount.toLocaleString()} → {afterCount.toLocaleString()} points
+      </div>
+      <div className="row">
+        <button
+          type="button"
+          className="btn small primary"
+          onClick={applySingle}
+          disabled={busy}
+        >
+          Apply
+        </button>
+        {isTrail && hasMultipleTrails && (
+          <button
+            type="button"
+            className="btn small"
+            onClick={applyAll}
+            disabled={busy}
+            title={`Simplify all trails (${allTrailsBefore.toLocaleString()} → ${allTrailsAfter.toLocaleString()} points)`}
+          >
+            Simplify all trails ({allTrailsBefore.toLocaleString()} → {allTrailsAfter.toLocaleString()} points)
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SimplifyAllPanel({ onClose }: { onClose: () => void }) {
+  const units = useApp((s) => s.session?.project.units ?? 'mi');
+  const features = useApp((s) => s.session?.project.features ?? EMPTY_FEATURES);
+  const result = useFit();
+  const fit = result?.ok ? result : null;
+  const trails = useMemo(
+    () => features.filter((feat): feat is Trail => feat.kind === 'trail'),
+    [features],
+  );
+  const junctions = useMemo(() => findJunctionCoordinates(features), [features]);
+
+  const mpp = fit?.metersPerPixel;
+  const unitLabel = fit ? (units === 'km' ? 'm' : 'ft') : 'px';
+
+  const { min, max, step, defaultVal, toPx } = useMemo(() => {
+    if (fit && mpp) {
+      if (units === 'km') {
+        const d = Math.max(0.5, Math.round(mpp * 1.5 * 10) / 10);
+        return {
+          min: 0,
+          max: Math.max(20, Math.round(mpp * 30)),
+          step: Math.max(0.1, Math.round(mpp * 0.1 * 10) / 10),
+          defaultVal: d,
+          toPx: (val: number) => val / mpp,
+        };
+      } else {
+        const ftPerPx = mpp / 0.3048;
+        const d = Math.max(1, Math.round(ftPerPx * 1.5));
+        return {
+          min: 0,
+          max: Math.max(60, Math.round(ftPerPx * 30)),
+          step: Math.max(0.5, Math.round(ftPerPx * 0.2 * 2) / 2),
+          defaultVal: d,
+          toPx: (val: number) => (val * 0.3048) / mpp,
+        };
+      }
+    }
+    return {
+      min: 0,
+      max: 30,
+      step: 0.5,
+      defaultVal: 1,
+      toPx: (val: number) => val,
+    };
+  }, [fit, mpp, units]);
+
+  const [tolerance, setTolerance] = useState(defaultVal);
+  const [smooth, setSmooth] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const tolerancePx = toPx(tolerance);
+  const totalBefore = useMemo(
+    () => trails.reduce((sum, t) => sum + t.pts.length, 0),
+    [trails],
+  );
+  const totalAfter = useMemo(
+    () => trails.reduce((sum, t) => sum + simplifyFeature(t, tolerancePx, smooth, junctions).pts.length, 0),
+    [trails, tolerancePx, smooth, junctions],
+  );
+
+  const applyAll = async () => {
+    const proj = project();
+    if (!proj) return;
+    setBusy(true);
+    try {
+      const updated = await runSliced(simplifyFeaturesSteps(trails, tolerancePx, smooth));
+      edit(simplifyFeatures(proj, updated));
+      sealHistory();
+      showToast(`Simplified ${updated.length} trails`);
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="simplify-all-panel" role="group" aria-label="Simplify all trails">
+      <div className="simplify-header">
+        <b>Simplify all trails</b>
+      </div>
+      <label className="field">
+        <span>Tolerance: {tolerance} {unitLabel}</span>
+        <input
+          type="range"
+          aria-label="Tolerance"
+          min={min}
+          max={max}
+          step={step}
+          value={tolerance}
+          onChange={(e) => setTolerance(parseFloat(e.target.value))}
+        />
+      </label>
+      <label className="chk">
+        <input
+          type="checkbox"
+          aria-label="Smooth"
+          checked={smooth}
+          onChange={(e) => setSmooth(e.target.checked)}
+        />
+        <span>Smooth</span>
+      </label>
+      <div className="point-count" aria-live="polite">
+        {totalBefore.toLocaleString()} → {totalAfter.toLocaleString()} points
+      </div>
+      <div className="row">
+        <button
+          type="button"
+          className="btn small primary"
+          onClick={applyAll}
+          disabled={busy}
+        >
+          Apply to all trails
+        </button>
+        <button
+          type="button"
+          className="btn small"
+          onClick={onClose}
+          disabled={busy}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** "Clean up junctions" (T-209): snap nearby trail ends at the current zoom's tolerance. */
 function CleanupButton() {
   const trailCount = useApp(
@@ -373,12 +692,32 @@ function CleanupButton() {
 /** Step 3's traced-feature section: draft bar, list and editor. */
 export function FeaturesPanel() {
   const open = useApp((s) => s.session !== null);
+  const trailCount = useApp(
+    (s) => s.session?.project.features.filter((f) => f.kind === 'trail').length ?? 0,
+  );
+  const [simplifyAllOpen, setSimplifyAllOpen] = useState(false);
+
   if (!open) return null;
   return (
     <div className="features-panel">
       <DraftBar />
       <FeatureList />
-      <CleanupButton />
+      <div className="panel-actions row">
+        <CleanupButton />
+        {trailCount > 0 && (
+          <button
+            type="button"
+            className="btn small"
+            aria-expanded={simplifyAllOpen}
+            onClick={() => setSimplifyAllOpen(!simplifyAllOpen)}
+          >
+            Simplify all trails
+          </button>
+        )}
+      </div>
+      {simplifyAllOpen && (
+        <SimplifyAllPanel onClose={() => setSimplifyAllOpen(false)} />
+      )}
       <FeatureEditor />
     </div>
   );

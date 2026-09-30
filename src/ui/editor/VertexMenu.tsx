@@ -31,6 +31,19 @@ export function VertexMenu() {
       aria-label="Vertex actions"
       className="vertex-menu"
       style={{ left: menu.client.x, top: menu.client.y }}
+      onKeyDown={(event) => {
+        if (event.key.toLowerCase() === 's' && menu.canSplit) {
+          event.preventDefault();
+          event.stopPropagation();
+          splitHere(menu.featureId, menu.index);
+          openVertexMenu(null);
+        } else if (event.key === 'Delete' || event.key === 'Backspace') {
+          event.preventDefault();
+          event.stopPropagation();
+          if (p) edit(deleteVertex(p, menu.featureId, menu.index));
+          openVertexMenu(null);
+        }
+      }}
     >
       {menu.canSplit ? (
         <button
@@ -43,18 +56,19 @@ export function VertexMenu() {
             openVertexMenu(null);
           }}
         >
-          Split here
+          Split here <kbd>S</kbd>
         </button>
       ) : null}
       <button
         type="button"
         role="menuitem"
+        aria-keyshortcuts="Delete Backspace"
         onClick={() => {
           if (p) edit(deleteVertex(p, menu.featureId, menu.index));
           openVertexMenu(null);
         }}
       >
-        Delete point
+        Delete point <kbd>Delete / Backspace</kbd>
       </button>
     </div>
   );

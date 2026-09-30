@@ -60,6 +60,11 @@ export function fitMessage(
       tone: 'warn',
     };
   }
+  if (!fit.checked && anchorCount >= 4 && fit.requested !== 'similarity')
+    return {
+      text: 'These anchors do not spread far enough across the map to check a stretch in every direction. Add an anchor farther from their line to confirm the fit.',
+      tone: 'good',
+    };
   if (!fit.checked)
     return { text: `${text} Add another anchor so the fit can be checked.`, tone: 'good' };
   text += ` Anchors agree within ${fmtRes(fit.rms).replace('±', '')} on average.`;

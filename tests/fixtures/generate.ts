@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
@@ -258,13 +258,25 @@ async function renderPdf(truth: FixtureTruth): Promise<Uint8Array> {
   return pdf.save({ useObjectStreams: false });
 }
 
+/**
+ * Output is deterministic, so skip files that already hold the same bytes. Several test files call
+ * generate() in setup while others read the fixtures in parallel workers; rewriting identical files
+ * let a reader catch a half-written PNG ("corrupt header").
+ */
+async function writeIfChanged(file: string, data: Uint8Array | string): Promise<void> {
+  const next = typeof data === 'string' ? Buffer.from(data) : Buffer.from(data);
+  const current = await readFile(file).catch(() => null);
+  if (current?.equals(next)) return;
+  await writeFile(file, next);
+}
+
 export async function generate(output = 'tests/fixtures/generated', seed = 20260924) {
   await mkdir(output, { recursive: true });
   for (const name of fixtureNames) {
     const { truth, png, pdf } = await renderFixture(name, seed);
-    await writeFile(resolve(output, `${name}.png`), png);
-    await writeFile(resolve(output, `${name}.pdf`), pdf);
-    await writeFile(resolve(output, `${name}.truth.json`), `${JSON.stringify(truth, null, 2)}\n`);
+    await writeIfChanged(resolve(output, `${name}.png`), png);
+    await writeIfChanged(resolve(output, `${name}.pdf`), pdf);
+    await writeIfChanged(resolve(output, `${name}.truth.json`), `${JSON.stringify(truth, null, 2)}\n`);
   }
   console.info(
     `Generated ${fixtureNames.length} PNG/PDF/truth fixtures (seed ${seed}) in ${output}`,

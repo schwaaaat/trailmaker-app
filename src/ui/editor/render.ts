@@ -6,6 +6,7 @@ import {
   type Anchor,
   type AnchorId,
   type Feature,
+  type FeatureId,
   type Px,
 } from '../../core/types';
 import type { CandidateSplitFocus, Draft, ReviewCandidate, VertexFocus } from '../../state/store';
@@ -41,6 +42,9 @@ export interface RenderModel {
   readonly focusedVertex: VertexFocus | null;
   /** Show the view-centre crosshair (T-215): keyboard modality, a placement tool, no open draft. */
   readonly centerCrosshair: boolean;
+  /** Live simplify/smooth preview for the selected feature (T-222). */
+  readonly simplifyPreview?: { readonly featureId: FeatureId; readonly pts: readonly Px[] } | null;
+  readonly connectPreview?: readonly Px[] | null;
 }
 
 type Ctx = CanvasRenderingContext2D;
@@ -84,7 +88,11 @@ export function renderFrame(
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   // With a layer, the selection is also in it (D-012): draw the live copy without a second fill.
-  if (sel && sel.kind !== 'poi') drawFeature(ctx, v, sel, true, !lines);
+  const previewPts =
+    m.simplifyPreview && sel && m.simplifyPreview.featureId === sel.id
+      ? m.simplifyPreview.pts
+      : undefined;
+  if (sel && sel.kind !== 'poi') drawFeature(ctx, v, sel, true, !lines, previewPts);
   const second = m.features.find(
     (f): f is LineFeature =>
       f.id === m.secondSelectedFeatureId && f.kind === 'trail' && f.id !== editId,
@@ -96,11 +104,34 @@ export function renderFrame(
   if (sel?.kind === 'poi') drawFeature(ctx, v, sel, true);
   if (m.candidates) drawCandidates(ctx, v, m.candidates, m.focusedCandidateSplit ?? null);
   if (m.draft) drawDraft(ctx, v, m.draft, m.cursor);
+  if (m.connectPreview?.length) drawConnectPreview(ctx, v, m.connectPreview);
   m.anchors.forEach((a, i) =>
     drawPin(ctx, v, a, i, a.id === m.selectedAnchorId, m.isOutlier(a.id)),
   );
   if (m.focusedVertex) drawVertexFocus(ctx, v, m.features, m.focusedVertex);
   if (m.centerCrosshair) drawCenterCrosshair(ctx, ctx.canvas.width / dpr, ctx.canvas.height / dpr);
+}
+
+function drawConnectPreview(ctx: Ctx, v: View, pts: readonly Px[]): void {
+  pathOf(ctx, v, pts, false);
+  ctx.strokeStyle = FOCUS_WHITE;
+  ctx.lineWidth = 8;
+  ctx.stroke();
+  ctx.strokeStyle = '#E4572E';
+  ctx.lineWidth = 4;
+  ctx.setLineDash([8, 5]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  for (const point of [pts[0]!, pts[pts.length - 1]!]) {
+    const [x, y] = scr(v, point);
+    ctx.beginPath();
+    ctx.arc(x, y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = '#E4572E';
+    ctx.fill();
+    ctx.strokeStyle = FOCUS_WHITE;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
 }
 
 /**
@@ -126,6 +157,7 @@ function drawVertexFocus(
   ctx.strokeStyle = INK;
   ctx.lineWidth = 2;
   ctx.stroke();
+  label(ctx, String(focus.index + 1), x + 13, y - 12, true);
 }
 
 /** Crosshair at the canvas centre (T-215): where Enter places the next point with the keyboard. */
@@ -234,7 +266,14 @@ function drawJoinCandidate(ctx: Ctx, v: View, f: LineFeature): void {
   ctx.setLineDash([]);
 }
 
-function drawFeature(ctx: Ctx, v: View, f: Feature, sel: boolean, fill = true): void {
+function drawFeature(
+  ctx: Ctx,
+  v: View,
+  f: Feature,
+  sel: boolean,
+  fill = true,
+  overridePts?: readonly Px[],
+): void {
   const color = normalizeColor(f.color, DEFAULT_COLORS[f.kind]);
   if (f.kind === 'poi') {
     const [px, py] = scr(v, f.at);
@@ -254,19 +293,20 @@ function drawFeature(ctx: Ctx, v: View, f: Feature, sel: boolean, fill = true): 
     label(ctx, f.name, px + 12, py - 10, sel);
     return;
   }
+  const pts = overridePts ?? f.pts;
   const close = f.kind === 'area';
   if (close && fill) {
-    pathOf(ctx, v, f.pts, true);
+    pathOf(ctx, v, pts, true);
     ctx.fillStyle = color + '40';
     ctx.fill();
   }
   if (sel) {
-    pathOf(ctx, v, f.pts, close);
+    pathOf(ctx, v, pts, close);
     ctx.strokeStyle = BLAZE;
     ctx.lineWidth = 11;
     ctx.stroke();
   }
-  pathOf(ctx, v, f.pts, close);
+  pathOf(ctx, v, pts, close);
   ctx.strokeStyle = 'rgba(255,255,255,.92)';
   ctx.lineWidth = 6.5;
   ctx.stroke();
@@ -277,15 +317,18 @@ function drawFeature(ctx: Ctx, v: View, f: Feature, sel: boolean, fill = true): 
     ctx.fillStyle = '#fff';
     ctx.strokeStyle = INK;
     ctx.lineWidth = 1.5;
-    for (const p of f.pts) {
+    for (const p of pts) {
       const [a, b] = scr(v, p);
       ctx.beginPath();
       ctx.rect(a - 3.5, b - 3.5, 7, 7);
       ctx.fill();
       ctx.stroke();
     }
-    const [a, b] = scr(v, f.pts[Math.floor(f.pts.length / 2)]!);
-    label(ctx, f.name, a + 10, b - 10, true);
+    const mid = pts[Math.floor(pts.length / 2)];
+    if (mid) {
+      const [a, b] = scr(v, mid);
+      label(ctx, f.name, a + 10, b - 10, true);
+    }
   }
 }
 

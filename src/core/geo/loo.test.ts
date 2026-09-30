@@ -11,6 +11,18 @@ const lat0 = 38.6;
 const lon0 = -78.4;
 const metersPerDegreeLat = 111320;
 const metersPerDegreeLon = 111320 * Math.cos((lat0 * Math.PI) / 180);
+const seabranchPixels: readonly Px[] = [
+  [1127, 720],
+  [1025, 562],
+  [655, 162],
+  [475, 395],
+];
+const seabranchCoordinates: readonly LatLon[] = [
+  [27.131201, -80.162278],
+  [27.134947, -80.164812],
+  [27.143866, -80.172832],
+  [27.136827, -80.17394],
+];
 const pixels: Px[] = [
   [80, 90],
   [1100, 100],
@@ -47,6 +59,41 @@ function fitted(anchors: readonly Anchor[], method: FitMethod): GeoFit {
 }
 
 describe('withLooResiduals', () => {
+  it('marks the initial Seabranch fit unchecked and leaves its lone cross-line anchor unscored', () => {
+    const anchors: Anchor[] = seabranchPixels.map((px, index) => ({
+      id: `seabranch-${index + 1}`,
+      px,
+      ll: seabranchCoordinates[index]!,
+      source: 'paste',
+    }));
+    const fit = fitAnchors(anchors, 1920, 945, 'auto');
+    if (!fit.ok) throw new Error(`Expected fit; got ${fit.reason}`);
+    const result = withLooResiduals(fit, anchors, 1920, 945);
+
+    expect(fit.method).toBe('affine');
+    expect(fit.checked).toBe(false);
+    expect(fit.rms).toBeLessThan(1);
+    expect(result.looResiduals).not.toHaveProperty('seabranch-4');
+    expect(Object.keys(result.looResiduals ?? {})).toHaveLength(3);
+  });
+
+  it('keeps the corrected Seabranch pin unchecked rather than treating it as an outlier', () => {
+    const anchors: Anchor[] = seabranchPixels.map((px, index) => ({
+      id: `seabranch-${index + 1}`,
+      px,
+      ll: index === 3 ? [27.138227, -80.176769] : seabranchCoordinates[index]!,
+      source: 'paste',
+    }));
+    const fit = fitAnchors(anchors, 1920, 945, 'auto');
+    if (!fit.ok) throw new Error(`Expected fit; got ${fit.reason}`);
+    const result = withLooResiduals(fit, anchors, 1920, 945);
+
+    expect(fit.method).toBe('affine');
+    expect(fit.checked).toBe(false);
+    expect(result.looResiduals).not.toHaveProperty('seabranch-4');
+    expect(fit.rms).toBeLessThan(60);
+  });
+
   it.each([
     ['similarity', 1000, 1e-6],
     ['affine', 1000, 1e-6],

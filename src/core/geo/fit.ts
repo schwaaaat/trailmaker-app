@@ -13,6 +13,7 @@ import type {
   ResolvedFitMethod,
 } from '../types';
 import { OUTLIER_MIN_M, OUTLIER_RMS_FACTOR, PLAUSIBLE_METERS_PER_PIXEL } from '../types';
+import { hasIndependentAffineSupport, supportsAffine } from './conditioning';
 export { withLooResiduals } from './loo';
 const D2R = Math.PI / 180;
 const MDEG = 6378137 * D2R;
@@ -139,8 +140,17 @@ export function fitAnchors(
   }
   if (!simAffine && !aff)
     return { ok: false, reason: 'degenerate', anchorCount: points.length, need: 0 };
+  const mapSpreadSupportsAffine = aff !== null && supportsAffine(valid.map((point) => point.px));
+  const affineIndependentlySupported =
+    aff !== null && hasIndependentAffineSupport(valid.map((point) => point.px));
+  const affineConditionRequired =
+    requested === 'affine' || requested === 'tps' || (requested === 'auto' && points.length >= 4);
   let method: ResolvedFitMethod =
-    requested === 'auto' ? (points.length >= 4 && aff ? 'affine' : 'similarity') : requested;
+    requested === 'auto'
+      ? points.length >= 4 && mapSpreadSupportsAffine
+        ? 'affine'
+        : 'similarity'
+      : requested;
   if (method === 'affine' && !aff) method = 'similarity';
   if (method === 'tps' && (points.length < 4 || !aff)) method = aff ? 'affine' : 'similarity';
   if (method === 'similarity' && !simAffine) method = 'affine';
@@ -197,7 +207,9 @@ export function fitAnchors(
     anchorCount: points.length,
     residuals,
     rms: Math.sqrt(squares / points.length),
-    checked: points.length > (method === 'similarity' ? 2 : 3),
+    checked:
+      points.length > (method === 'similarity' ? 2 : 3) &&
+      (!affineConditionRequired || affineIndependentlySupported),
     looResiduals: null,
     metersPerPixel,
     mirrored: method !== 'similarity' && affDet > 0,

@@ -7,7 +7,10 @@ import {
   loadSplitLayout,
   MAX_FRAC,
   MIN_FRAC,
+  resetSplitLayout,
   saveSplitLayout,
+  subscribeSplitLayout,
+  SPLIT_LAYOUT_STORAGE_KEY,
   useNarrowViewport,
 } from './splitLayout';
 
@@ -96,3 +99,25 @@ describe('useNarrowViewport', () => {
     host.remove();
   });
 });
+
+describe('subscribeSplitLayout / resetSplitLayout', () => {
+  it('notifies subscribers when resetSplitLayout is called', () => {
+    saveSplitLayout({ show: true, mode: 'overlay', frac: 0.7 });
+    const listener = vi.fn();
+    const unsub = subscribeSplitLayout(listener);
+
+    try {
+      const reset = resetSplitLayout();
+      expect(reset).toStrictEqual({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
+      expect(listener).toHaveBeenCalledWith({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
+      expect(loadSplitLayout()).toStrictEqual({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
+    } finally {
+      unsub();
+    }
+  });
+
+  it('exports SPLIT_LAYOUT_STORAGE_KEY matching storage key constant', () => {
+    expect(SPLIT_LAYOUT_STORAGE_KEY).toBe('trailmaker:splitLayout');
+  });
+});
+

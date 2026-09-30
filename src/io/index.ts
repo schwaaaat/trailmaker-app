@@ -8,4 +8,5 @@ export * from './settings';
 export * from './pwa';
 export * from './gpx';
 export * from './gpxStorage';
+export * from './satellite-capture';
 

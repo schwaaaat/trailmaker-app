@@ -137,6 +137,18 @@ function validateMapImage(img: unknown): void {
   if (typeof img.sha256 !== 'string' || !img.sha256) {
     throw new Error('image.sha256 must be a non-empty string');
   }
+  if (
+    img.attribution !== undefined &&
+    (typeof img.attribution !== 'string' || !img.attribution)
+  ) {
+    throw new Error('image.attribution must be a non-empty string when present');
+  }
+  if (
+    img.acquisitionYear !== undefined &&
+    (!Number.isInteger(img.acquisitionYear) || (img.acquisitionYear as number) < 1)
+  ) {
+    throw new Error('image.acquisitionYear must be a positive integer when present');
+  }
   if (!isObject(img.source)) {
     throw new Error('image.source must be an object');
   }

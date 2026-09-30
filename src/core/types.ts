@@ -77,6 +77,14 @@ export interface MapImage {
   readonly source: MapSource;
   /** Lower-case hex SHA-256 of the original file bytes; lets autosave/project files verify the image. */
   readonly sha256: string;
+  /**
+   * Imagery credit for maps captured from an imagery service (T-318/T-320), e.g.
+   * "Imagery: USDA NAIP via USGS The National Map". Shown in the app and written into KML/KMZ.
+   * Absent for maps opened from a file.
+   */
+  readonly attribution?: string;
+  /** Year the imagery was acquired, when the provider reports it (NAIP, T-320). */
+  readonly acquisitionYear?: number;
 }
 
 /** Longest side, in pixels, of the working raster. Larger images are downscaled for tracing; the original is kept for export. */

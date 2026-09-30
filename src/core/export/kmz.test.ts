@@ -117,6 +117,14 @@ function recorder(cancelAt = Infinity) {
 }
 
 describe('buildKmz', () => {
+  it('passes imagery provenance through to the packaged KML description', () => {
+    const doc = { ...MIXED, imageAttribution: 'Imagery: USDA NAIP via USGS The National Map', acquisitionYear: 2024 };
+    const files = unzipSync(buildKmz(req({ doc })));
+    expect(strFromU8(files['doc.kml']!)).toContain(
+      '<description>Imagery: USDA NAIP via USGS The National Map (acquired 2024)</description>',
+    );
+  });
+
   it('zips doc.kml first, then the overlay image its GroundOverlay points at', () => {
     const zip = buildKmz(req());
     const list = entries(zip);

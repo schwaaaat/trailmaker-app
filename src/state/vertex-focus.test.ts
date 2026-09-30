@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Feature } from '../core/types';
-import { clampVertexFocus, stepCount, stepVertexFocus } from './vertex-focus';
+import { clampVertexFocus, moveVertexFocus, stepCount, stepVertexFocus } from './vertex-focus';
 
 const trail: Feature = {
   kind: 'trail',
@@ -70,6 +70,21 @@ describe('stepVertexFocus', () => {
   });
   it('is null with no feature selected', () => {
     expect(stepVertexFocus(null, undefined, 1)).toBeNull();
+  });
+});
+
+describe('moveVertexFocus (T-223)', () => {
+  it('moves one or ten points in either direction and clamps at endpoints', () => {
+    expect(moveVertexFocus(null, trail, 1)).toEqual({ featureId: 't1', index: 0 });
+    expect(moveVertexFocus({ featureId: 't1', index: 0 }, trail, 1, 10)).toEqual({
+      featureId: 't1',
+      index: 2,
+    });
+    expect(moveVertexFocus({ featureId: 't1', index: 2 }, trail, -1, 10)).toEqual({
+      featureId: 't1',
+      index: 0,
+    });
+    expect(moveVertexFocus(null, poi, 1)).toBeNull();
   });
 });
 

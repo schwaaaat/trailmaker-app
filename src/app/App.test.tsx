@@ -2,7 +2,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { updateBasemapSettings, resetSettings } from '../io/settings';
-import { openSession } from '../state/store';
+import { appStore, openSession, requestSatelliteCapture } from '../state/store';
 import { makeProject, makeSession } from '../state/fixtures.test.helper';
 import App from './App';
 import { loadSplitLayout, saveSplitLayout } from './splitLayout';
@@ -60,7 +60,7 @@ describe('App georef split (T-212)', () => {
     render();
     expect(q('.stage.split')).toBeTruthy();
     expect(host.querySelector('[role="region"][aria-label="Park map"]')).toBeTruthy();
-    expect(host.querySelector('[role="region"][aria-label="Basemap"]')).toBeTruthy();
+    expect(host.querySelector('.stage-georef')).toBeTruthy();
     expect(host.querySelector('[role="separator"]')).toBeTruthy();
   });
 
@@ -91,11 +91,11 @@ describe('App georef split (T-212)', () => {
   it('stacks the panes vertically under the narrow-viewport breakpoint', () => {
     vi.stubGlobal(
       'matchMedia',
-      vi.fn().mockReturnValue({
-        matches: true,
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 899px)',
         addEventListener: () => {},
         removeEventListener: () => {},
-      }),
+      })),
     );
     act(() => updateBasemapSettings({ enabled: true }));
     saveSplitLayout({ show: true, mode: 'pair', frac: 0.5 });
@@ -104,5 +104,36 @@ describe('App georef split (T-212)', () => {
     expect(host.querySelector('[role="separator"]')?.getAttribute('aria-orientation')).toBe(
       'horizontal',
     );
+  });
+
+  it('uses stage tabs at phone widths and stores the selected pane for Lane C', () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 899px)' || query === '(max-width: 820px)',
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })),
+    );
+    act(() => updateBasemapSettings({ enabled: true }));
+    saveSplitLayout({ show: true, mode: 'pair', frac: 0.5 });
+    render();
+    expect(q('.stage-tabs')).toBeTruthy();
+    expect(host.querySelector('[role="separator"]')).toBeNull();
+    act(() =>
+      [...host.querySelectorAll('button')].find((b) => b.textContent === 'Basemap')!.click(),
+    );
+    expect(appStore.getState().stageView).toBe('basemap');
+    act(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Map')!.click());
+    expect(appStore.getState().stageView).toBe('map');
+  });
+
+  it('shows basemap when satelliteCaptureRequested is set in store (T-318)', () => {
+    act(() => updateBasemapSettings({ enabled: true }));
+    render();
+    expect(q('.stage.split')).toBeFalsy();
+    act(() => requestSatelliteCapture());
+    render();
+    expect(q('.stage.split')).toBeTruthy();
   });
 });

@@ -17,6 +17,11 @@ const kmlColor = (hex: HexColor, alpha = 'ff'): string =>
 const coords = (ll: readonly LatLon[]): string =>
   ll.map(([lat, lon]) => `${f7(lon)},${f7(lat)},0`).join(' ');
 
+type ProvenanceDocument = ExportDocument & {
+  readonly imageAttribution?: string;
+  readonly acquisitionYear?: number;
+};
+
 /** The <Style> for one feature: line color + 0x55 fill, or the POI icon. */
 function styleOf(f: GeoFeature): string {
   const id = esc('s-' + f.id);
@@ -81,6 +86,13 @@ export function* kmlParts(
   yield '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n' +
     `<Document><name>${esc(doc.name)}</name><open>1</open>\n`;
+  const provenance = doc as ProvenanceDocument;
+  if (provenance.imageAttribution) {
+    const year = provenance.acquisitionYear === undefined
+      ? ''
+      : ` (acquired ${provenance.acquisitionYear})`;
+    yield `<description>${esc(`${provenance.imageAttribution}${year}`)}</description>\n`;
+  }
   for (const f of doc.features) yield styleOf(f);
   for (const folder of FOLDERS) {
     if (!doc.features.some((f) => f.kind === folder.kind)) continue;

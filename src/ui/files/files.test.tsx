@@ -732,6 +732,7 @@ describe('T-304 File UI & Open Routing', () => {
       expect(container.querySelector('h3')?.textContent).toBe('Drop a park map here');
       expect(container.querySelector('p')?.textContent).toContain('PNG, JPG, WebP or PDF');
       expect(container.querySelector('#openBtn2')).not.toBeNull();
+      expect(container.querySelector('#startSatelliteBtnEmpty')).not.toBeNull();
       expect(container.querySelector('#resume')?.textContent).toBe('Resume last');
     });
 
