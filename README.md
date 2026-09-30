@@ -34,7 +34,7 @@ loaded, and installs as an app (PWA).
 
 ## Two-minute walkthrough
 
-The screenshots use the public-domain NPS
+The walkthrough screenshots use the public-domain NPS
 [Dickey Ridge Area map](https://www.nps.gov/shen/planyourvisit/upload/DickeyRidgeArea_RoadTrail.pdf)
 from Shenandoah National Park. It's in `tests/fixtures/real/`.
 
@@ -48,7 +48,8 @@ a visitor center, trailhead, junction or overlook. Paste its coordinates (decima
 degrees-minutes-seconds, or a Google Maps URL) and press Enter. Or open the basemap and tap the
 same spot there. Use three to six spots spread across the map, not in a line.
 
-Trailmaker fits the map and shows how well the anchors agree. If one is well off, it turns red so
+Trailmaker fits the map and shows how well the anchors agree (within 50 m in the screenshot). If
+one is well off, it turns red so
 you can re-check it. If the anchors can't check each other yet (for example, most of them lie on
 one line), it says so and suggests where to add one. For warped or hand-drawn maps, pick
 *Rubber sheet* under **Fit method**.
@@ -85,6 +86,9 @@ gives you every format. **Save project** writes a `.trailmaker` file you can reo
    detail, for example "USGS NAIP · about 0.3 m per pixel". Zoom the map out to take in more.
 3. Click **Capture map**. The imagery becomes your map, already pinned to the real world, so
    there are no anchors to place. Trace, connect, simplify and export as above.
+
+![A 0.3 m NAIP capture of Seabranch Preserve, Florida, with its nine automatic anchors and the live
+satellite basemap beside it](docs/screenshots/5-satellite.png)
 
 In the lower 48 US states the capture uses **NAIP** aerial imagery (USDA, via USGS, 0.3–0.6 m per
 pixel). Elsewhere, or where NAIP has no data, it falls back to the USGS imagery basemap (about
@@ -136,8 +140,9 @@ pnpm gate              # all of the above, then build
 ```
 
 To regenerate the README screenshots, run
-`README_SHOTS=1 pnpm exec playwright test readme-screenshots`. On Windows PowerShell, set
-`$env:README_SHOTS='1'` first.
+`README_SHOTS=1 README_FIXTURE=dickey-ridge README_ANCHORS=1,2,3 pnpm exec playwright test readme-screenshots`.
+On Windows PowerShell, set the three variables with `$env:NAME='value'` first. The satellite
+screenshot (`5-satellite.png`) is a live NAIP capture of Seabranch Preserve.
 
 Layout: `src/core` holds the pure TypeScript (geo fits, tracing, export, project format,
 topology), `src/worker` the Comlink worker, `src/state` the Zustand store, `src/ui` the canvas

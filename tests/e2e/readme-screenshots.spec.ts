@@ -42,7 +42,12 @@ test('README walkthrough screenshots', async ({ page }) => {
   await page.screenshot({ path: `${OUT}/1-open.png` });
 
   await page.getByRole('button', { name: 'Add anchor' }).click();
-  for (const [i, anchor] of truth.anchors.slice(0, 4).entries()) {
+  // README_ANCHORS picks which fixture anchors to use (0-based, comma-separated); the fixture
+  // coordinates are approximate, so leave out any that disagree for a clean showcase.
+  const picked = process.env.README_ANCHORS
+    ? process.env.README_ANCHORS.split(',').map((i) => truth.anchors[Number(i)]!)
+    : truth.anchors.slice(0, 4);
+  for (const [i, anchor] of picked.entries()) {
     await click(anchor.px);
     const input = page.getByRole('textbox', { name: `Coordinates for anchor ${i + 1}` });
     await expect(input).toBeVisible();
@@ -51,7 +56,7 @@ test('README walkthrough screenshots', async ({ page }) => {
   }
   await expect
     .poll(() => page.evaluate(() => window.__trailmaker!.session.getSession()!.project.anchors.filter((a) => a.ll).length))
-    .toBe(4);
+    .toBe(picked.length);
   await page.screenshot({ path: `${OUT}/2-anchors.png` });
 
   await steps.getByRole('checkbox', { name: "Follow the line's color while tracing" }).check();
