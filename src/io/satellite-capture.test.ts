@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fitAnchors, forward } from '../core/geo/fit';
 import { haversine } from '../core/geo/distance';
 import * as imageModule from './image';
+import { IMAGERY_SOURCES, parseArcGisService } from './imagery-sources';
 import { makeMap, makeProject } from '../state/fixtures.test.helper';
 import {
   computeOptimalZoom,
@@ -19,6 +20,8 @@ import {
   captureSatelliteView,
   buildSatelliteProject,
   drawMissingTileGap,
+  runWithConcurrency,
+  MAX_ARCGIS_CONCURRENT_REQUESTS,
   satelliteCaptureTestSeam,
   MAX_CAPTURE_LONG_SIDE,
   MAX_CAPTURE_TILES,
@@ -35,9 +38,9 @@ describe('Web Mercator tile math', () => {
     const coords: [number, number][] = [
       [0, 0],
       [37.7749, -122.4194], // San Francisco
-      [27.1234, -80.1234],  // Seabranch Preserve area
+      [27.1234, -80.1234], // Seabranch Preserve area
       [-33.8688, 151.2093], // Sydney
-      [64.1466, -21.9426],  // Reykjavik
+      [64.1466, -21.9426], // Reykjavik
     ];
 
     for (const zoom of [0, 4, 10, 16]) {
@@ -108,7 +111,12 @@ describe('Framed bounds & zoom calculation', () => {
     expect(dims.metersPerPixel).toBeCloseTo(NAIP_GROUND_RESOLUTION_M, 1);
     expect(Math.max(dims.width, dims.height)).toBeLessThanOrEqual(MAX_NAIP_CAPTURE_LONG_SIDE);
     expect(requests.length).toBeLessThanOrEqual(MAX_NAIP_EXPORT_REQUESTS);
-    expect(requests.every((request) => request.width <= NAIP_EXPORT_IMAGE_SIZE && request.height <= NAIP_EXPORT_IMAGE_SIZE)).toBe(true);
+    expect(
+      requests.every(
+        (request) =>
+          request.width <= NAIP_EXPORT_IMAGE_SIZE && request.height <= NAIP_EXPORT_IMAGE_SIZE,
+      ),
+    ).toBe(true);
     expect(requests.at(-1)?.bbox[0]).toBeLessThan(requests.at(-1)?.bbox[2] ?? 0);
     expect(requests.at(-1)?.bbox[1]).toBeLessThan(requests.at(-1)?.bbox[3] ?? 0);
   });
@@ -128,10 +136,11 @@ describe('Framed bounds & zoom calculation', () => {
     const requests = planNaipRequests(dims);
     const [centerX, centerY] = latLonToWorldPx([lat, lon], 0);
     const worldMeters = 40075016.686;
-    const expectedX = centerX * worldMeters / TILE_SIZE - worldMeters / 2;
-    const expectedY = worldMeters / 2 - centerY * worldMeters / TILE_SIZE;
-    const halfWidthM = (bounds.east - bounds.west) * Math.PI / 180 * 6378137 / 2;
-    const halfHeightM = 6378137 * Math.log(Math.tan(Math.PI / 4 + bounds.north * Math.PI / 360)) - expectedY;
+    const expectedX = (centerX * worldMeters) / TILE_SIZE - worldMeters / 2;
+    const expectedY = worldMeters / 2 - (centerY * worldMeters) / TILE_SIZE;
+    const halfWidthM = ((((bounds.east - bounds.west) * Math.PI) / 180) * 6378137) / 2;
+    const halfHeightM =
+      6378137 * Math.log(Math.tan(Math.PI / 4 + (bounds.north * Math.PI) / 360)) - expectedY;
 
     expect(requests.length).toBeGreaterThan(0);
     for (const { bbox } of requests) {
@@ -186,10 +195,7 @@ describe('Acceptance 4: 3x3 anchor grid accuracy on 3 km capture at 30° latitud
         const u = col / 4;
         const v = row / 4;
 
-        const px: [number, number] = [
-          Math.round(u * dims.width),
-          Math.round(v * dims.height),
-        ];
+        const px: [number, number] = [Math.round(u * dims.width), Math.round(v * dims.height)];
 
         // World coordinates of the sampled pixel on the stitched capture
         const wx = dims.xMin + px[0];
@@ -233,8 +239,16 @@ describe('Acceptance 4: 3x3 anchor grid accuracy on 3 km capture at 30° latitud
     if (!fit.ok) throw new Error('NAIP anchor fit failed');
     for (let row = 0; row < 5; row++) {
       for (let col = 0; col < 5; col++) {
-        const px: [number, number] = [Math.round(col * dims.width / 4), Math.round(row * dims.height / 4)];
-        expect(haversine(forward(fit, px), worldPxToLatLon([dims.xMin + px[0], dims.yMin + px[1]], zoom))).toBeLessThan(0.5);
+        const px: [number, number] = [
+          Math.round((col * dims.width) / 4),
+          Math.round((row * dims.height) / 4),
+        ];
+        expect(
+          haversine(
+            forward(fit, px),
+            worldPxToLatLon([dims.xMin + px[0], dims.yMin + px[1]], zoom),
+          ),
+        ).toBeLessThan(0.5);
       }
     }
   });
@@ -288,6 +302,49 @@ describe('Tile stitching & missing tile handling', () => {
     satelliteCaptureTestSeam.createCanvas = null;
   });
 
+  it('falls back to NAIP when a curated imagery request fails', async () => {
+    const result = await captureSatelliteView({
+      bounds: { north: 27.135, south: 27.13, west: -80.145, east: -80.14 },
+      imagerySource: IMAGERY_SOURCES[0],
+      serviceRequestLoader: async () => {
+        throw new Error('Imagery service returned HTTP 503');
+      },
+      naipRequestLoader: async () => ({}) as CanvasImageSource,
+    });
+    expect(result.source).toBe('naip');
+    expect(result.fallbackReason).toContain('HTTP 503');
+    expect(result.fallbackReason).toContain('using USGS NAIP');
+  });
+
+  it('preserves request failures for a pasted custom imagery source', async () => {
+    const customSource = parseArcGisService(
+      'https://imagery.example.test/arcgis/rest/services/Local/MapServer',
+      {
+        name: 'Local',
+        copyrightText: 'Example',
+        fullExtent: {
+          xmin: -9_000_000,
+          ymin: 3_000_000,
+          xmax: -8_900_000,
+          ymax: 3_100_000,
+          spatialReference: { wkid: 3857 },
+        },
+        spatialReference: { wkid: 3857 },
+        maxImageWidth: 2048,
+        maxImageHeight: 2048,
+      },
+    );
+    await expect(
+      captureSatelliteView({
+        bounds: { north: 27.135, south: 27.13, west: -80.145, east: -80.14 },
+        imagerySource: customSource,
+        serviceRequestLoader: async () => {
+          throw new Error('Imagery service returned HTTP 503');
+        },
+      }),
+    ).rejects.toThrow('Could not capture Local: Imagery service returned HTTP 503');
+  });
+
   it('renders a distinct non-silent gap pattern for missing tiles', () => {
     const mockCtx = {
       save: vi.fn(),
@@ -316,9 +373,9 @@ describe('Tile stitching & missing tile handling', () => {
     // Small bounds creating 2x2 tiles
     const bounds: FramedBounds = {
       north: 27.135,
-      south: 27.130,
+      south: 27.13,
       west: -80.145,
-      east: -80.140,
+      east: -80.14,
     };
 
     let fetchedCount = 0;
@@ -361,8 +418,8 @@ describe('Tile stitching & missing tile handling', () => {
             source: { kind: 'image', mimeType: 'image/png' },
             sha256: 'mock-sha',
           },
-        })
-      )
+        }),
+      ),
     );
 
     const { project, map } = await buildSatelliteProject(result, '2026-09-29T12:00:00.000Z');
@@ -371,11 +428,29 @@ describe('Tile stitching & missing tile handling', () => {
     expect(project.anchors[0]?.source).toBe('basemap');
     expect(project.image.attribution).toBe('Imagery: USGS The National Map');
     expect(project.image.acquisitionYear).toBeUndefined();
-    expect((map.meta as { attribution?: string }).attribution).toBe('Imagery: USGS The National Map');
+    expect((map.meta as { attribution?: string }).attribution).toBe(
+      'Imagery: USGS The National Map',
+    );
+  });
+
+  it('limits same-host service export workers to two concurrent requests', async () => {
+    let active = 0;
+    let maximum = 0;
+    await runWithConcurrency(
+      Array.from({ length: 9 }, (_, index) => index),
+      MAX_ARCGIS_CONCURRENT_REQUESTS,
+      async () => {
+        active++;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active--;
+      },
+    );
+    expect(maximum).toBe(2);
   });
 
   it('captures NAIP with exact anchors and USDA attribution', async () => {
-    const bounds = { north: 27.135, south: 27.130, west: -80.145, east: -80.140 };
+    const bounds = { north: 27.135, south: 27.13, west: -80.145, east: -80.14 };
     let requests = 0;
     const result = await captureSatelliteView({
       bounds,
@@ -401,7 +476,7 @@ describe('Tile stitching & missing tile handling', () => {
 
   it('falls back to USGS on empty NAIP exports and reports the reason', async () => {
     const result = await captureSatelliteView({
-      bounds: { north: 27.135, south: 27.130, west: -80.145, east: -80.140 },
+      bounds: { north: 27.135, south: 27.13, west: -80.145, east: -80.14 },
       providerId: 'naip',
       naipRequestLoader: async () => null,
       tileLoader: async () => null,
@@ -416,16 +491,16 @@ describe('Tile stitching & missing tile handling', () => {
 
     const bounds: FramedBounds = {
       north: 27.135,
-      south: 27.130,
+      south: 27.13,
       west: -80.145,
-      east: -80.140,
+      east: -80.14,
     };
 
     await expect(
       captureSatelliteView({
         bounds,
         signal: controller.signal,
-      })
+      }),
     ).rejects.toThrow();
   });
 });

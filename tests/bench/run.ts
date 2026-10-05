@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import { autoTraceColor, deriveDefaultAutoTraceOptions } from '../../src/core/trace/autotrace';
 import { tracePath } from '../../src/core/trace/astar';
 import { scanColors } from '../../src/core/trace/scan';
+import { refineLine } from '../../src/core/trace/refine';
 import { newProject } from '../../src/core/project';
 import type { Anchor, Px, RasterImage, Rgb } from '../../src/core/types';
 import { fixtureNames, generate } from '../fixtures/generate';
@@ -32,6 +33,32 @@ export function passesQuality(recall: number, precision: number) {
   return (
     Number.isFinite(recall) && Number.isFinite(precision) && recall >= 0.95 && precision >= 0.9
   );
+}
+
+function noisySparseLine(pts: readonly Px[], metersPerPixel: number): Px[] {
+  const sampled: Px[] = [pts[0]!];
+  let accumulated = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    accumulated += length;
+    if (accumulated >= 10 || i === pts.length - 1) {
+      sampled.push(b);
+      accumulated = 0;
+    }
+  }
+  return sampled.map((p, i) => {
+    if (i === 0 || i === sampled.length - 1) return p;
+    const a = sampled[i - 1]!;
+    const b = sampled[i + 1]!;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy) || 1;
+    const noiseMeters = (((i * 17) % 7) - 3) * 0.5;
+    const offset = noiseMeters / Math.max(0.001, metersPerPixel);
+    return [p[0] - (dy / length) * offset, p[1] + (dx / length) * offset] as Px;
+  });
 }
 
 const realFixtureNames = ['dickey-ridge', 'acadia-carriage-roads', 'zion-wilderness'] as const;
@@ -154,6 +181,33 @@ export async function runBench(): Promise<BenchRow[]> {
       }
     }
     if (name === 'solid' || name === 'dashed' || name === 'crossings') {
+      const refineTarget = `refine ${name} / 10px samples, ±1.5m input noise / >=95% within 2px`;
+      const refineTruth = truth.polylines.find((line) => line.id === 'red-ridge');
+      if (!refineTruth) throw new Error(`Missing ${name} refinement truth`);
+      const handLine = noisySparseLine(refineTruth.pts, truth.transform.metersPerPixel);
+      const refined = measure(
+        () =>
+          refineLine(
+            image,
+            handLine,
+            Math.max(6, Math.min(40, 4 / truth.transform.metersPerPixel)),
+            refineTruth.color,
+            60,
+            [],
+          ),
+        'trace/refine.refineLine',
+      );
+      if (!refined)
+        rows.push({ target: refineTarget, status: 'pending', reason: 'T-327 refineLine' });
+      else {
+        const quality = lengthRecallPrecision([refined.value.pts], [refineTruth.pts], 2);
+        rows.push({
+          target: refineTarget,
+          status: quality.recall >= 0.95 && quality.precision >= 0.95 ? 'pass' : 'fail',
+          ...quality,
+          ms: refined.ms,
+        });
+      }
       const target = `smart-follow ${name} 400px / Node median <100ms, Hausdorff <=2px`;
       const truthHop = truth.polylines.find((line) => line.id === 'red-ridge')?.pts.slice(0, 51);
       if (!truthHop || truthHop.length !== 51)
@@ -279,6 +333,48 @@ export async function runBench(): Promise<BenchRow[]> {
       reason: `non-gating; effective tolerance ${effective.tolerance}, gap ${effective.gapPx} px, min length ${effective.minLengthPx.toFixed(2)} px (project defaults ${defaults.trace.tolerance}/${defaults.autoTrace.gapPx}/${defaultMinLengthPx.toFixed(2)}); 5 px`,
     });
   }
+  // A 3 km trail at 0.15 m/px is 20,000 image pixels. This times the exact synchronous
+  // routine called by WorkerApi.refineTrail on a narrow, bounded raster corridor.
+  const longWidth = 20_000;
+  const longHeight = 32;
+  const longData = new Uint8ClampedArray(longWidth * longHeight * 4);
+  for (let pixel = 0; pixel < longWidth * longHeight; pixel++) {
+    const index = pixel * 4;
+    longData[index] = 90;
+    longData[index + 1] = 137;
+    longData[index + 2] = 76;
+    longData[index + 3] = 255;
+  }
+  for (let x = 0; x < longWidth; x++) {
+    for (let y = 13; y <= 15; y++) {
+      const index = (y * longWidth + x) * 4;
+      longData[index] = 205;
+      longData[index + 1] = 48;
+      longData[index + 2] = 48;
+    }
+  }
+  const longImage: RasterImage = { width: longWidth, height: longHeight, data: longData };
+  const longPts: Px[] = [
+    [2, 17],
+    [longWidth - 3, 17],
+  ];
+  const longTimings: number[] = [];
+  for (let run = 0; run < 3; run++) {
+    const measured = measure(
+      () => refineLine(longImage, longPts, 6, [205, 48, 48], 60, []),
+      'trace/refine.refineLine',
+    );
+    if (!measured) break;
+    longTimings.push(measured.ms);
+  }
+  longTimings.sort((a, b) => a - b);
+  const longMedian = longTimings[Math.floor(longTimings.length / 2)] ?? Infinity;
+  rows.push({
+    target: '3000 m / 0.15 m per px / worker refine routine <1500 ms',
+    status: longMedian < 1500 ? 'pass' : 'fail',
+    ms: longMedian,
+    reason: `20,000 px route; ${longTimings.map((value) => value.toFixed(1)).join(' / ')} ms`,
+  });
   return rows;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -63,6 +63,12 @@ export function fakeWorker(over: Partial<WorkerApi> = {}) {
       snappedTo: req.to,
       ms: 5,
     }),
+    refineTrail: async (req) => ({
+      pts: req.pts,
+      segments: [{ from: 0, to: req.pts.length - 1, refined: false, confidence: 0 }],
+      ink: req.ink ?? [0, 0, 0],
+      ms: 5,
+    }),
     scanColors: async (): Promise<ColorScanResult> => ({ colors: [] }),
     autoTrace: async (): Promise<readonly AutoTraceCandidate[]> => [],
     buildKmz: async () => new Uint8Array(),
@@ -78,7 +84,7 @@ export function fakeWorker(over: Partial<WorkerApi> = {}) {
       const fn = impl[method] as (...a: unknown[]) => Promise<unknown>;
       const result = fn(...args);
       const ctl = args[args.length - 1] as JobControl | undefined;
-      const cancellable = ['smartTrace', 'scanColors', 'autoTrace', 'buildKmz'].includes(method);
+      const cancellable = ['smartTrace', 'refineTrail', 'scanColors', 'autoTrace', 'buildKmz'].includes(method);
       return cancellable && ctl?.jobId ? track(ctl, result) : result;
     };
   }

@@ -36,12 +36,22 @@ test('four park-map and offline basemap clicks create accurate paired anchors [T
     mountBasemapPane(host, { overrideStyleUrl: styleUrl, handleRef });
   }, offlineStylePath);
 
-  const pane = page.getByRole('region', { name: 'Basemap' });
+  // Scoped to the test host: since T-325 the app's own pane also opens (in Tabs) during pairing.
+  const pane = page.locator('#test-basemap-pairing-host').getByRole('region', { name: 'Basemap' });
   await pane.getByRole('button', { name: 'Enable basemap' }).click();
-  await expect.poll(() => page.evaluate(() =>
-    (window as Window & { __basemapPairingRef?: { current: BasemapHandle | null } })
-      .__basemapPairingRef?.current?.getMap()?.isStyleLoaded(),
-  ), { timeout: 30_000 }).toBe(true);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() =>
+          (
+            window as Window & { __basemapPairingRef?: { current: BasemapHandle | null } }
+          ).__basemapPairingRef?.current
+            ?.getMap()
+            ?.isStyleLoaded(),
+        ),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
 
   const toolbar = page.getByRole('toolbar', { name: 'Map tools' });
   for (const [index, anchor] of truth.anchors.slice(0, 4).entries()) {
@@ -55,23 +65,31 @@ test('four park-map and offline basemap clicks create accurate paired anchors [T
       (host as HTMLElement).style.pointerEvents = 'auto';
     });
     const point = await page.evaluate(([lat, lon]) => {
-      const map = (window as Window & {
-        __basemapPairingRef?: { current: BasemapHandle | null };
-      }).__basemapPairingRef?.current?.getMap();
+      const map = (
+        window as Window & {
+          __basemapPairingRef?: { current: BasemapHandle | null };
+        }
+      ).__basemapPairingRef?.current?.getMap();
       if (!map) throw new Error('Basemap not ready');
       const pixel = map.project([lon, lat]);
       const rect = map.getContainer().getBoundingClientRect();
       return { x: rect.left + pixel.x, y: rect.top + pixel.y };
     }, anchor.ll!);
     await page.mouse.click(point.x, point.y);
-    await expect.poll(() => page.evaluate((n) => {
-      const anchors = window.__trailmaker!.session.getSession()!.project.anchors;
-      return anchors.length === n && anchors[n - 1]?.source === 'basemap';
-    }, index + 1)).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate((n) => {
+          const anchors = window.__trailmaker!.session.getSession()!.project.anchors;
+          return anchors.length === n && anchors[n - 1]?.source === 'basemap';
+        }, index + 1),
+      )
+      .toBe(true);
     await expect(pane.getByRole('button', { name: `Anchor ${index + 1}` })).toBeVisible();
   }
 
-  const anchors = await page.evaluate(() => window.__trailmaker!.session.getSession()!.project.anchors);
+  const anchors = await page.evaluate(
+    () => window.__trailmaker!.session.getSession()!.project.anchors,
+  );
   const fit = fitAnchors(anchors, truth.width, truth.height, 'auto');
   expect(fit.ok).toBe(true);
   if (!fit.ok) return;

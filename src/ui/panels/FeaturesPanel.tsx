@@ -10,6 +10,7 @@ import {
   type Feature,
   type GeoFit,
   type PoiType,
+  type Px,
   type Trail,
   type Units,
 } from '../../core/types';
@@ -29,15 +30,22 @@ import {
   selectSecondFeature,
   setJoinArmed,
   setSimplifyPreview,
+  setRefinePreview,
+  type RefinePreviewEntry,
   showToast,
 } from '../../state/store';
 import { cleanupJunctions, cleanupTolerancePx, joinSelected } from '../../state/topology-actions';
-import { findJunctionCoordinates, simplifyFeature, simplifyFeaturesSteps } from '../../core/trace/simplify';
+import {
+  findJunctionCoordinates,
+  simplifyFeature,
+  simplifyFeaturesSteps,
+} from '../../core/trace/simplify';
 import { currentEditor } from '../editor/EditorStage';
 import { runSliced } from '../editor/slice';
 import { cancelDraft, continueTrail, draftUndo, finishDraft } from '../editor/tools';
 import { toScr } from '../editor/view';
 import { cachedFeatureLengthM, fillFeatureLengths } from './lengths';
+import { cancelRefinement, startRefineAll, startRefinement } from './refine-actions';
 
 const project = () => appStore.getState().session?.project ?? null;
 const ORDER = { trail: 0, area: 1, poi: 2 } as const;
@@ -155,8 +163,17 @@ const FeatureRow = memo(function FeatureRow({
   m: number | undefined;
   units: Units;
 }) {
+  const [contextOpen, setContextOpen] = useState(false);
   return (
-    <li className={selected ? 'sel' : undefined}>
+    <li
+      className={selected ? 'sel' : undefined}
+      onContextMenu={(event) => {
+        if (f.kind !== 'trail') return;
+        event.preventDefault();
+        selectFeature(f.id);
+        setContextOpen(true);
+      }}
+    >
       <button
         type="button"
         aria-pressed={selected}
@@ -175,6 +192,20 @@ const FeatureRow = memo(function FeatureRow({
         <span className="fname">{f.name}</span>
         <Measure f={f} fit={fit} m={m} units={units} />
       </button>
+      {contextOpen && f.kind === 'trail' ? (
+        <div className="feature-context-menu" role="menu" aria-label={`${f.name} actions`}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setContextOpen(false);
+              void startRefinement([f.id]);
+            }}
+          >
+            Refine to map image
+          </button>
+        </div>
+      ) : null}
     </li>
   );
 });
@@ -253,6 +284,9 @@ function FeatureEditor() {
       s.session?.project.features.find((x) => x.id === s.secondSelectedFeatureId)?.name ?? null,
   );
   const joinArmed = useApp((s) => s.joinArmed);
+  const refinementBlocked = useApp(
+    (s) => s.job !== null || s.refinePreview !== null || s.draft !== null,
+  );
   const focus = useApp((s) => s.focusRequest);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -327,6 +361,14 @@ function FeatureEditor() {
       <div className="row">
         {f.kind === 'trail' ? (
           <>
+            <button
+              type="button"
+              className="btn small"
+              disabled={refinementBlocked}
+              onClick={() => void startRefinement([f.id])}
+            >
+              Refine to map image
+            </button>
             <button
               type="button"
               className="btn small touch-only"
@@ -454,10 +496,7 @@ function SimplifyControl({ f }: { f: Extract<Feature, { kind: 'trail' | 'area' }
   const isTrail = f.kind === 'trail';
   const hasMultipleTrails = trails.length > 1;
 
-  const allTrailsBefore = useMemo(
-    () => trails.reduce((sum, t) => sum + t.pts.length, 0),
-    [trails],
-  );
+  const allTrailsBefore = useMemo(() => trails.reduce((sum, t) => sum + t.pts.length, 0), [trails]);
   const allTrailsAfter = useMemo(() => {
     if (!hasMultipleTrails) return afterCount;
     return trails.reduce((sum, t) => {
@@ -472,7 +511,14 @@ function SimplifyControl({ f }: { f: Extract<Feature, { kind: 'trail' | 'area' }
     const proj = project();
     if (!proj) return;
     setSimplifyPreview(null);
-    edit(setFeaturePoints(proj, f.id, simplified.pts, smooth ? `Smooth ${f.kind}` : `Simplify ${f.kind}`));
+    edit(
+      setFeaturePoints(
+        proj,
+        f.id,
+        simplified.pts,
+        smooth ? `Smooth ${f.kind}` : `Simplify ${f.kind}`,
+      ),
+    );
     sealHistory();
     showToast(`Applied to ${f.name}`);
   };
@@ -498,7 +544,9 @@ function SimplifyControl({ f }: { f: Extract<Feature, { kind: 'trail' | 'area' }
         <b>Simplify</b>
       </div>
       <label className="field">
-        <span>Tolerance: {tolerance} {unitLabel}</span>
+        <span>
+          Tolerance: {tolerance} {unitLabel}
+        </span>
         <input
           type="range"
           aria-label="Tolerance"
@@ -522,12 +570,7 @@ function SimplifyControl({ f }: { f: Extract<Feature, { kind: 'trail' | 'area' }
         {beforeCount.toLocaleString()} → {afterCount.toLocaleString()} points
       </div>
       <div className="row">
-        <button
-          type="button"
-          className="btn small primary"
-          onClick={applySingle}
-          disabled={busy}
-        >
+        <button type="button" className="btn small primary" onClick={applySingle} disabled={busy}>
           Apply
         </button>
         {isTrail && hasMultipleTrails && (
@@ -538,7 +581,8 @@ function SimplifyControl({ f }: { f: Extract<Feature, { kind: 'trail' | 'area' }
             disabled={busy}
             title={`Simplify all trails (${allTrailsBefore.toLocaleString()} → ${allTrailsAfter.toLocaleString()} points)`}
           >
-            Simplify all trails ({allTrailsBefore.toLocaleString()} → {allTrailsAfter.toLocaleString()} points)
+            Simplify all trails ({allTrailsBefore.toLocaleString()} →{' '}
+            {allTrailsAfter.toLocaleString()} points)
           </button>
         )}
       </div>
@@ -597,12 +641,13 @@ function SimplifyAllPanel({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
 
   const tolerancePx = toPx(tolerance);
-  const totalBefore = useMemo(
-    () => trails.reduce((sum, t) => sum + t.pts.length, 0),
-    [trails],
-  );
+  const totalBefore = useMemo(() => trails.reduce((sum, t) => sum + t.pts.length, 0), [trails]);
   const totalAfter = useMemo(
-    () => trails.reduce((sum, t) => sum + simplifyFeature(t, tolerancePx, smooth, junctions).pts.length, 0),
+    () =>
+      trails.reduce(
+        (sum, t) => sum + simplifyFeature(t, tolerancePx, smooth, junctions).pts.length,
+        0,
+      ),
     [trails, tolerancePx, smooth, junctions],
   );
 
@@ -627,7 +672,9 @@ function SimplifyAllPanel({ onClose }: { onClose: () => void }) {
         <b>Simplify all trails</b>
       </div>
       <label className="field">
-        <span>Tolerance: {tolerance} {unitLabel}</span>
+        <span>
+          Tolerance: {tolerance} {unitLabel}
+        </span>
         <input
           type="range"
           aria-label="Tolerance"
@@ -651,20 +698,10 @@ function SimplifyAllPanel({ onClose }: { onClose: () => void }) {
         {totalBefore.toLocaleString()} → {totalAfter.toLocaleString()} points
       </div>
       <div className="row">
-        <button
-          type="button"
-          className="btn small primary"
-          onClick={applyAll}
-          disabled={busy}
-        >
+        <button type="button" className="btn small primary" onClick={applyAll} disabled={busy}>
           Apply to all trails
         </button>
-        <button
-          type="button"
-          className="btn small"
-          onClick={onClose}
-          disabled={busy}
-        >
+        <button type="button" className="btn small" onClick={onClose} disabled={busy}>
           Cancel
         </button>
       </div>
@@ -692,6 +729,9 @@ function CleanupButton() {
 /** Step 3's traced-feature section: draft bar, list and editor. */
 export function FeaturesPanel() {
   const open = useApp((s) => s.session !== null);
+  const refinementBlocked = useApp(
+    (s) => s.job !== null || s.refinePreview !== null || s.draft !== null,
+  );
   const trailCount = useApp(
     (s) => s.session?.project.features.filter((f) => f.kind === 'trail').length ?? 0,
   );
@@ -708,6 +748,16 @@ export function FeaturesPanel() {
           <button
             type="button"
             className="btn small"
+            disabled={refinementBlocked}
+            onClick={() => void startRefineAll()}
+          >
+            Refine all trails
+          </button>
+        )}
+        {trailCount > 0 && (
+          <button
+            type="button"
+            className="btn small"
             aria-expanded={simplifyAllOpen}
             onClick={() => setSimplifyAllOpen(!simplifyAllOpen)}
           >
@@ -715,10 +765,146 @@ export function FeaturesPanel() {
           </button>
         )}
       </div>
-      {simplifyAllOpen && (
-        <SimplifyAllPanel onClose={() => setSimplifyAllOpen(false)} />
-      )}
+      {simplifyAllOpen && <SimplifyAllPanel onClose={() => setSimplifyAllOpen(false)} />}
+      <RefineReview />
       <FeatureEditor />
     </div>
+  );
+}
+
+function pointsFromParts(parts: RefinePreviewEntry['parts']): Px[] {
+  const pts: Px[] = [];
+  for (const part of parts) {
+    const section = part.useRefined ? part.refinedPts : part.originalPts;
+    if (!section.length) continue;
+    if (!pts.length) pts.push(...section);
+    else {
+      const startsAtLast = pts.at(-1)![0] === section[0]![0] && pts.at(-1)![1] === section[0]![1];
+      pts.push(...(startsAtLast ? section.slice(1) : section));
+    }
+  }
+  return pts;
+}
+
+function RefineReview() {
+  const preview = useApp((s) => s.refinePreview);
+  const job = useApp((s) => (s.job?.kind === 'refine' ? s.job : null));
+  const editorBackdrop = useApp((s) => s.editorBackdrop ?? 'map');
+  if (job) {
+    return (
+      <div className="refine-job" role="status" aria-label="Refining trails">
+        <span>{job.stage}</span>
+        <progress max={1} value={job.fraction} />
+        <button type="button" className="btn small" onClick={cancelRefinement}>
+          Cancel refinement
+        </button>
+      </div>
+    );
+  }
+  if (!preview) return null;
+  const acceptAll = () => {
+    const current = appStore.getState().refinePreview;
+    if (!current) return;
+    setRefinePreview({
+      ...current,
+      entries: current.entries.map((entry) => ({
+        ...entry,
+        parts: entry.parts.map((part) => ({ ...part, useRefined: part.confidence >= 0.6 })),
+      })),
+    });
+  };
+  const togglePart = (entryIndex: number, partIndex: number, useRefined: boolean) => {
+    const current = appStore.getState().refinePreview;
+    if (!current) return;
+    setRefinePreview({
+      ...current,
+      entries: current.entries.map((entry, i) =>
+        i !== entryIndex
+          ? entry
+          : {
+              ...entry,
+              parts: entry.parts.map((part, j) =>
+                j === partIndex ? { ...part, useRefined } : part,
+              ),
+            },
+      ),
+    });
+  };
+  const apply = () => {
+    const project = appStore.getState().session?.project;
+    if (!project) return;
+    const updated = preview.entries.flatMap((entry) => {
+      const current = project.features.find((feature) => feature.id === entry.featureId);
+      if (!current || current.kind !== 'trail') return [];
+      const sameSource =
+        current.pts.length === entry.originalPts.length &&
+        current.pts.every(
+          (point, i) =>
+            point[0] === entry.originalPts[i]![0] && point[1] === entry.originalPts[i]![1],
+        );
+      if (!sameSource) return [];
+      const pts = pointsFromParts(entry.parts);
+      if (pts.length < 2) return [];
+      return [{ ...current, pts }];
+    });
+    if (updated.length !== preview.entries.length) {
+      setRefinePreview(null);
+      showToast('The trail changed during refinement. Please refine it again.');
+      return;
+    }
+    if (!updated.length) {
+      setRefinePreview(null);
+      return;
+    }
+    const changed = updated.filter((trail) => {
+      const before = preview.entries.find((entry) => entry.featureId === trail.id)!.originalPts;
+      return (
+        trail.pts.length !== before.length ||
+        trail.pts.some((point, i) => point[0] !== before[i]?.[0] || point[1] !== before[i]?.[1])
+      );
+    });
+    setRefinePreview(null);
+    if (!changed.length) return;
+    if (preview.batch) edit(simplifyFeatures(project, changed, 'Refine all trails'));
+    else
+      edit(setFeaturePoints(project, changed[0]!.id, changed[0]!.pts, 'Refine trail to map image'));
+  };
+  return (
+    <section className="refine-review" aria-label="Refinement preview">
+      <h3>Refinement preview</h3>
+      {editorBackdrop === 'esri' ? (
+        <p className="hint" role="note">
+          Refining against the map image, not Esri.
+        </p>
+      ) : null}
+      {preview.entries.map((entry, entryIndex) => (
+        <fieldset key={entry.featureId}>
+          <legend>{entry.name}</legend>
+          {entry.parts.map((part, partIndex) => (
+            <label key={partIndex} className="field refine-section-toggle">
+              <input
+                type="checkbox"
+                checked={part.useRefined}
+                disabled={part.confidence < 0.6}
+                onChange={(event) => togglePart(entryIndex, partIndex, event.target.checked)}
+              />
+              Use image path for section {partIndex + 1} ({Math.round(part.confidence * 100)}%
+              confidence)
+            </label>
+          ))}
+        </fieldset>
+      ))}
+      <div className="row">
+        <button type="button" className="btn small" onClick={acceptAll}>
+          Accept all supported sections
+        </button>
+        <button type="button" className="btn small primary" onClick={apply}>
+          Apply refinement
+        </button>
+        <button type="button" className="btn small" onClick={() => setRefinePreview(null)}>
+          Reject
+        </button>
+      </div>
+    </section>
   );
 }

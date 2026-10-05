@@ -3,7 +3,13 @@ import type { Remote } from 'comlink';
 import type { ImageId, JobControl, JobId, RasterImage, WorkerApi } from '../core/types';
 import type { InternalJobControl } from './api';
 
-const CANCELLABLE = new Set<keyof WorkerApi>(['smartTrace', 'scanColors', 'autoTrace', 'buildKmz']);
+const CANCELLABLE = new Set<keyof WorkerApi>([
+  'smartTrace',
+  'refineTrail',
+  'scanColors',
+  'autoTrace',
+  'buildKmz',
+]);
 type WorkerMethod = keyof WorkerApi;
 
 function cancellationFlag(): SharedArrayBuffer {

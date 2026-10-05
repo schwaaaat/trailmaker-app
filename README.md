@@ -6,7 +6,8 @@ CalTopo, OsmAnd, Garmin and Google Earth. You can start from either:
 - **A park or trail map** you already have: a photo, scan, screenshot or PDF. Pin a few spots to
   real coordinates, then trace the trails by hand or let Trailmaker find them by color.
 - **Satellite imagery**, when there's no printed map. Frame an area, capture sharp aerial imagery
-  as your map (US public-domain NAIP imagery, up to 0.3 m per pixel), and trace what you can see.
+  as your map (US public-domain NAIP, or finer local-agency imagery where available), and trace what
+  you can see.
 
 It runs entirely in your browser, works on phones and desktops, keeps working offline once
 loaded, and installs as an app (PWA).
@@ -27,7 +28,10 @@ loaded, and installs as an app (PWA).
     is stored in this browser only and sent only to Esri's tile server
     (`ibasemaps-api.arcgis.com`).
   - **Start from satellite** downloads imagery for the area you frame, from the USGS servers
-    above.
+    above or, where it covers the frame, a local agency's aerial imagery (Martin County, FL:
+    `geoweb.martin.fl.us`). If you paste another ArcGIS imagery service, it goes to that server
+    (for example `ca.dep.state.fl.us`). These servers receive only the framed area and image
+    size; your map image and trails aren't sent.
   - **Place search** (a separate checkbox, off by default). It sends only the text you type to
     `nominatim.openstreetmap.org`.
 - The *Google Maps* link in the anchors step is an ordinary link that you choose to open.
@@ -93,6 +97,20 @@ satellite basemap beside it](docs/screenshots/5-satellite.png)
 In the lower 48 US states the capture uses **NAIP** aerial imagery (USDA, via USGS, 0.3–0.6 m per
 pixel). Elsewhere, or where NAIP has no data, it falls back to the USGS imagery basemap (about
 2 m per pixel) and tells you.
+
+## New in v1.5
+
+- **More room to work on one monitor.** Desktop opens with full-width Map and Basemap tabs. The
+  Steps panel can collapse to a narrow rail; the layout control can switch back to side by side.
+- **Live Esri reference.** Add your own ArcGIS API key in Basemap settings, then choose **Esri
+  (live)** in the map stage and adjust **Map image opacity over Esri**. You can trace by hand over
+  the reference. Trailmaker does not capture, analyze, or export Esri imagery.
+- **Sharper local imagery.** In **Start from satellite**, Martin County imagery is offered where
+  available. You can also paste a compatible ArcGIS imagery service URL and confirm its reuse
+  rights before capture. The captured image stays in your browser and saved project.
+- **Refine traced trails.** Select a trail and choose **Refine to map image**, or choose **Refine
+  all trails**. Review the proposed sections before applying them; the edit is undoable. Refine
+  reads your opened or captured map image, including when Esri is visible behind it.
 
 ## Imagery sources and licenses
 

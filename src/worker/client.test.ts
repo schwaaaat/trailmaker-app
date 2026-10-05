@@ -12,6 +12,7 @@ function stubWorkerApi(): WorkerApi {
     pickInk: vi.fn(async () => [1, 2, 3] as const),
     snapToInk: vi.fn(async () => null),
     smartTrace: vi.fn(async () => ({ path: null, snappedTo: [0, 0] as const, ms: 0 })),
+    refineTrail: vi.fn(async () => ({ pts: [], segments: [], ink: [0, 0, 0] as const, ms: 0 })),
     scanColors: vi.fn(async () => ({ colors: [] })),
     autoTrace: vi.fn(async () => []),
     buildKmz: vi.fn(async () => new Uint8Array()),

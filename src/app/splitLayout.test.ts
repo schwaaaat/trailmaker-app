@@ -46,20 +46,61 @@ describe('clampFrac', () => {
 
 describe('loadSplitLayout / saveSplitLayout', () => {
   it('defaults to hidden, pair mode, and the default fraction', () => {
-    expect(loadSplitLayout()).toStrictEqual({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
+    expect(loadSplitLayout()).toStrictEqual({
+      show: false,
+      mode: 'pair',
+      frac: DEFAULT_FRAC,
+      stageMode: 'tabs',
+      stepsCollapsed: false,
+    });
   });
 
   it('round-trips a saved layout', () => {
-    saveSplitLayout({ show: true, mode: 'overlay', frac: 0.4 });
-    expect(loadSplitLayout()).toStrictEqual({ show: true, mode: 'overlay', frac: 0.4 });
+    saveSplitLayout({
+      show: true,
+      mode: 'overlay',
+      frac: 0.4,
+      stageMode: 'tabs',
+      stepsCollapsed: true,
+    });
+    expect(loadSplitLayout()).toStrictEqual({
+      show: true,
+      mode: 'overlay',
+      frac: 0.4,
+      stageMode: 'tabs',
+      stepsCollapsed: true,
+    });
+  });
+
+  it('migrates an existing saved layout without stageMode to side by side', () => {
+    window.localStorage.setItem(KEY, JSON.stringify({ show: true, mode: 'pair', frac: 0.55 }));
+    expect(loadSplitLayout()).toStrictEqual({
+      show: true,
+      mode: 'pair',
+      frac: 0.55,
+      stageMode: 'side-by-side',
+      stepsCollapsed: false,
+    });
   });
 
   it('falls back to defaults for corrupt storage, and clamps an out-of-range fraction', () => {
     window.localStorage.setItem(KEY, '{not json');
-    expect(loadSplitLayout()).toStrictEqual({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
+    expect(loadSplitLayout()).toStrictEqual({
+      show: false,
+      mode: 'pair',
+      frac: DEFAULT_FRAC,
+      stageMode: 'tabs',
+      stepsCollapsed: false,
+    });
 
     window.localStorage.setItem(KEY, JSON.stringify({ show: true, mode: 'overlay', frac: 5 }));
-    expect(loadSplitLayout()).toStrictEqual({ show: true, mode: 'overlay', frac: MAX_FRAC });
+    expect(loadSplitLayout()).toStrictEqual({
+      show: true,
+      mode: 'overlay',
+      frac: MAX_FRAC,
+      stageMode: 'side-by-side',
+      stepsCollapsed: false,
+    });
   });
 });
 
@@ -108,9 +149,16 @@ describe('subscribeSplitLayout / resetSplitLayout', () => {
 
     try {
       const reset = resetSplitLayout();
-      expect(reset).toStrictEqual({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
-      expect(listener).toHaveBeenCalledWith({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
-      expect(loadSplitLayout()).toStrictEqual({ show: false, mode: 'pair', frac: DEFAULT_FRAC });
+      const defaults = {
+        show: false,
+        mode: 'pair',
+        frac: DEFAULT_FRAC,
+        stageMode: 'tabs',
+        stepsCollapsed: false,
+      } as const;
+      expect(reset).toStrictEqual(defaults);
+      expect(listener).toHaveBeenCalledWith(defaults);
+      expect(loadSplitLayout()).toStrictEqual(defaults);
     } finally {
       unsub();
     }
@@ -120,4 +168,3 @@ describe('subscribeSplitLayout / resetSplitLayout', () => {
     expect(SPLIT_LAYOUT_STORAGE_KEY).toBe('trailmaker:splitLayout');
   });
 });
-

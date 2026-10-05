@@ -5,6 +5,13 @@ import { loadImageFile } from './image';
 import type { LoadedMap } from '../ui/contract';
 import { SATELLITE_PROVIDERS } from '../ui/georef/satellite';
 import type { SatelliteProviderId } from './settings';
+import {
+  achievableImageryResolution,
+  isMostlyBlank,
+  planServiceRequests,
+  type ImagerySource,
+  type ServiceRequest,
+} from './imagery-sources';
 
 export const MAX_CAPTURE_LONG_SIDE = 8192;
 export const MAX_CAPTURE_TILES = 256;
@@ -12,6 +19,7 @@ export const MAX_CONCURRENT_REQUESTS = 6;
 export const MAX_NAIP_CAPTURE_LONG_SIDE = 12_000;
 export const MAX_NAIP_EXPORT_REQUESTS = 16;
 export const MAX_NAIP_CONCURRENT_REQUESTS = 3;
+export const MAX_ARCGIS_CONCURRENT_REQUESTS = 2;
 export const NAIP_EXPORT_IMAGE_SIZE = 4000;
 export const NAIP_GROUND_RESOLUTION_M = 0.3;
 export const NAIP_SERVICE_URL =
@@ -21,6 +29,77 @@ export const NAIP_IDENTIFY_URL =
 export const TILE_SIZE = 256;
 export const DEFAULT_USGS_ATTRIBUTION = 'Imagery: USGS The National Map';
 export const DEFAULT_NAIP_ATTRIBUTION = 'Imagery: USDA NAIP via USGS The National Map';
+
+function mercatorBounds(bounds: FramedBounds): {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+} {
+  const project = (lon: number, lat: number): [number, number] => {
+    const x = (lon * EQUATOR_METERS) / 360;
+    const clamped = Math.max(-85.051129, Math.min(85.051129, lat));
+    const y =
+      ((Math.log(Math.tan(((90 + clamped) * Math.PI) / 360)) / (Math.PI / 180)) * EQUATOR_METERS) /
+      360;
+    return [x, y];
+  };
+  const [west, south] = project(bounds.west, bounds.south);
+  const [east, north] = project(bounds.east, bounds.north);
+  return { west, south, east, north };
+}
+
+async function defaultFetchArcGisImage(
+  source: ImagerySource,
+  request: ServiceRequest,
+  signal?: AbortSignal,
+): Promise<CanvasImageSource | null> {
+  const endpoint =
+    source.url.replace(/\/$/, '') +
+    (source.kind === 'mapserver-export' ? '/export' : '/exportImage');
+  const url = new URL(endpoint);
+  url.search = new URLSearchParams({
+    bbox: `${request.bbox.west},${request.bbox.south},${request.bbox.east},${request.bbox.north}`,
+    bboxSR: '3857',
+    imageSR: '3857',
+    size: `${request.width},${request.height}`,
+    format: 'jpg',
+    f: 'image',
+  }).toString();
+  let response: Response;
+  try {
+    response = await fetch(url, { mode: 'cors', cache: 'no-store', ...(signal ? { signal } : {}) });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new Error(
+      'Could not reach this imagery service. It may block CORS requests or be offline.',
+    );
+  }
+  if (!response.ok) throw new Error(`Imagery service returned HTTP ${response.status}`);
+  const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) {
+    const details = await blob.text();
+    try {
+      const error = JSON.parse(details) as {
+        error?: { code?: number; message?: string; details?: string[] };
+      };
+      const message =
+        `${error.error?.message ?? ''} ${error.error?.details?.join(' ') ?? ''}`.trim();
+      if (
+        error.error?.code === 498 ||
+        error.error?.code === 499 ||
+        /token|credential|sign.?in|unauthor/i.test(message)
+      ) {
+        throw new Error('This imagery service requires a token or login.');
+      }
+      if (message) throw new Error(`Imagery service error: ${message}`);
+    } catch (error) {
+      if (error instanceof Error && /token|Imagery service error/.test(error.message)) throw error;
+    }
+    throw new Error('Imagery service returned no image. Check CORS and service access.');
+  }
+  return await createImageBitmap(blob);
+}
 
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
@@ -66,7 +145,7 @@ export interface CaptureResult {
   readonly missingTiles: number;
   readonly fileName: string;
   readonly projectName: string;
-  readonly source: 'naip' | 'usgs';
+  readonly source: 'naip' | 'usgs' | 'arcgis';
   readonly fallbackReason?: string;
   readonly acquisitionYear?: number;
 }
@@ -79,9 +158,26 @@ export interface CaptureOptions {
   readonly date?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly onProgress?: ((progress: CaptureProgress) => void) | undefined;
-  readonly tileLoader?: ((x: number, y: number, z: number, signal?: AbortSignal) => Promise<CanvasImageSource | null>) | undefined;
-  readonly naipRequestLoader?: ((bbox: readonly [number, number, number, number], size: readonly [number, number], signal?: AbortSignal) => Promise<CanvasImageSource | null>) | undefined;
-  readonly naipYearLoader?: ((bounds: FramedBounds, signal?: AbortSignal) => Promise<number | undefined>) | undefined;
+  readonly tileLoader?:
+    | ((x: number, y: number, z: number, signal?: AbortSignal) => Promise<CanvasImageSource | null>)
+    | undefined;
+  readonly naipRequestLoader?:
+    | ((
+        bbox: readonly [number, number, number, number],
+        size: readonly [number, number],
+        signal?: AbortSignal,
+      ) => Promise<CanvasImageSource | null>)
+    | undefined;
+  readonly naipYearLoader?:
+    ((bounds: FramedBounds, signal?: AbortSignal) => Promise<number | undefined>) | undefined;
+  readonly imagerySource?: ImagerySource | undefined;
+  readonly serviceRequestLoader?:
+    | ((
+        source: ImagerySource,
+        request: ServiceRequest,
+        signal?: AbortSignal,
+      ) => Promise<CanvasImageSource | null>)
+    | undefined;
 }
 
 export interface NaipRequest {
@@ -97,11 +193,18 @@ const WEB_MERCATOR_HALF_WORLD_M = EQUATOR_METERS / 2;
 /** Uses the finest 0.3 m ground resolution that fits the output and request caps. */
 export function computeOptimalNaipZoom(bounds: FramedBounds): number {
   const centerLat = (bounds.north + bounds.south) / 2;
-  let zoom = Math.log2((EQUATOR_METERS * Math.cos(centerLat * D2R)) / (TILE_SIZE * NAIP_GROUND_RESOLUTION_M));
+  let zoom = Math.log2(
+    (EQUATOR_METERS * Math.cos(centerLat * D2R)) / (TILE_SIZE * NAIP_GROUND_RESOLUTION_M),
+  );
   for (let attempts = 0; attempts < 12; attempts++) {
     const dims = getCaptureDimensions(bounds, zoom);
-    const requests = Math.ceil(dims.width / NAIP_EXPORT_IMAGE_SIZE) * Math.ceil(dims.height / NAIP_EXPORT_IMAGE_SIZE);
-    if (Math.max(dims.width, dims.height) <= MAX_NAIP_CAPTURE_LONG_SIDE && requests <= MAX_NAIP_EXPORT_REQUESTS) {
+    const requests =
+      Math.ceil(dims.width / NAIP_EXPORT_IMAGE_SIZE) *
+      Math.ceil(dims.height / NAIP_EXPORT_IMAGE_SIZE);
+    if (
+      Math.max(dims.width, dims.height) <= MAX_NAIP_CAPTURE_LONG_SIDE &&
+      requests <= MAX_NAIP_EXPORT_REQUESTS
+    ) {
       return zoom;
     }
     const longSide = Math.max(dims.width, dims.height);
@@ -203,7 +306,7 @@ export function computeOptimalZoom(
   maxLongSide = MAX_CAPTURE_LONG_SIDE,
   maxTiles = MAX_CAPTURE_TILES,
   maxZoom = SATELLITE_PROVIDERS.usgs.maxZoom,
-  minZoom = 0
+  minZoom = 0,
 ): number {
   for (let z = maxZoom; z >= minZoom; z--) {
     const dims = getCaptureDimensions(bounds, z);
@@ -220,7 +323,7 @@ export function getAvailableZoomRange(
   bounds: FramedBounds,
   maxLongSide = MAX_CAPTURE_LONG_SIDE,
   maxTiles = MAX_CAPTURE_TILES,
-  maxProviderZoom = SATELLITE_PROVIDERS.usgs.maxZoom
+  maxProviderZoom = SATELLITE_PROVIDERS.usgs.maxZoom,
 ): { minZoom: number; maxZoom: number; defaultZoom: number } {
   const optimal = computeOptimalZoom(bounds, maxLongSide, maxTiles, maxProviderZoom, 0);
   const minZ = Math.max(0, optimal - 4);
@@ -234,7 +337,11 @@ export function getAvailableZoomRange(
 /**
  * Formats a project name matching acceptance: "Satellite <place or lat,lon> <date>".
  */
-export function generateProjectName(bounds: FramedBounds, placeName?: string, date?: string): string {
+export function generateProjectName(
+  bounds: FramedBounds,
+  placeName?: string,
+  date?: string,
+): string {
   const d = date || new Date().toISOString().slice(0, 10);
   const trimmed = placeName?.trim();
   if (trimmed) {
@@ -247,8 +354,13 @@ export function generateProjectName(bounds: FramedBounds, placeName?: string, da
 
 export interface SatelliteCaptureTestSeam {
   createCanvas?:
-    | ((width: number, height: number) => {
-        getContext: (type: string) => CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+    | ((
+        width: number,
+        height: number,
+      ) => {
+        getContext: (
+          type: string,
+        ) => CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
         convertToBlob?: (options?: { type: string }) => Promise<Blob>;
         toBlob?: (callback: (blob: Blob | null) => void, type?: string) => void;
       })
@@ -267,7 +379,7 @@ export const satelliteCaptureTestSeam: SatelliteCaptureTestSeam = {
 export function generateTileAnchors(
   dims: CaptureDimensions,
   workingWidth = dims.width,
-  workingHeight = dims.height
+  workingHeight = dims.height,
 ): Anchor[] {
   const anchors: Anchor[] = [];
   let id = 1;
@@ -308,7 +420,7 @@ export function drawMissingTileGap(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   destX: number,
   destY: number,
-  tileSize = TILE_SIZE
+  tileSize = TILE_SIZE,
 ): void {
   ctx.save();
   ctx.fillStyle = '#f0f0f0';
@@ -332,12 +444,12 @@ export function drawMissingTileGap(
 /**
  * Runs an array of tasks with bounded concurrency (default 6 concurrent requests).
  */
-async function runWithConcurrency<T, R>(
+export async function runWithConcurrency<T, R>(
   items: readonly T[],
   concurrencyLimit: number,
   worker: (item: T, index: number) => Promise<R>,
   signal?: AbortSignal,
-  onItemDone?: (doneCount: number, totalCount: number) => void
+  onItemDone?: (doneCount: number, totalCount: number) => void,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let nextIndex = 0;
@@ -359,10 +471,7 @@ async function runWithConcurrency<T, R>(
     }
   }
 
-  const pool = Array.from(
-    { length: Math.min(concurrencyLimit, items.length) },
-    () => runner()
-  );
+  const pool = Array.from({ length: Math.min(concurrencyLimit, items.length) }, () => runner());
 
   await Promise.all(pool);
   return results;
@@ -376,7 +485,7 @@ async function defaultFetchTile(
   x: number,
   y: number,
   z: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<CanvasImageSource | null> {
   const url = SATELLITE_PROVIDERS.usgs.tileUrl
     .replace('{z}', String(z))
@@ -442,20 +551,29 @@ async function defaultFetchNaipImage(
     const img = new Image();
     img.crossOrigin = 'anonymous';
     const objectUrl = URL.createObjectURL(blob);
-    img.onload = () => { URL.revokeObjectURL(objectUrl); resolve(img); };
-    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('NAIP image decode failed')); };
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('NAIP image decode failed'));
+    };
     img.src = objectUrl;
   });
 }
 
-async function defaultFetchNaipYear(bounds: FramedBounds, signal?: AbortSignal): Promise<number | undefined> {
+async function defaultFetchNaipYear(
+  bounds: FramedBounds,
+  signal?: AbortSignal,
+): Promise<number | undefined> {
   try {
     const centerLat = (bounds.north + bounds.south) / 2;
     const centerLon = (bounds.west + bounds.east) / 2;
     const [worldX, worldY] = latLonToWorldPx([centerLat, centerLon], 0);
     const point = {
-      x: worldX * EQUATOR_METERS / TILE_SIZE - WEB_MERCATOR_HALF_WORLD_M,
-      y: WEB_MERCATOR_HALF_WORLD_M - worldY * EQUATOR_METERS / TILE_SIZE,
+      x: (worldX * EQUATOR_METERS) / TILE_SIZE - WEB_MERCATOR_HALF_WORLD_M,
+      y: WEB_MERCATOR_HALF_WORLD_M - (worldY * EQUATOR_METERS) / TILE_SIZE,
       spatialReference: { wkid: 3857 },
     };
     const url = new URL(NAIP_IDENTIFY_URL);
@@ -471,12 +589,15 @@ async function defaultFetchNaipYear(bounds: FramedBounds, signal?: AbortSignal):
     if (signal) init.signal = signal;
     const response = await fetch(url, init);
     if (!response.ok) return undefined;
-    const result = await response.json() as {
+    const result = (await response.json()) as {
       catalogItems?: { features?: Array<{ attributes?: Record<string, unknown> }> };
     };
     const years = (result.catalogItems?.features ?? [])
       .map((feature) => feature.attributes?.Year ?? feature.attributes?.year)
-      .filter((year): year is number => typeof year === 'number' && Number.isInteger(year) && year >= 1900 && year <= 2100);
+      .filter(
+        (year): year is number =>
+          typeof year === 'number' && Number.isInteger(year) && year >= 1900 && year <= 2100,
+      );
     return years.length ? Math.max(...years) : undefined;
   } catch {
     return undefined;
@@ -489,47 +610,105 @@ function hasMissingNaipData(
 ): boolean | null {
   if (!('getImageData' in ctx) || typeof ctx.getImageData !== 'function') return null;
   try {
-    return requests.some((request) =>
-      ctx.getImageData(
-        request.x + Math.floor(request.width / 2),
-        request.y + Math.floor(request.height / 2),
-        1,
-        1,
-      ).data[3] === 0,
+    return requests.some(
+      (request) =>
+        ctx.getImageData(
+          request.x + Math.floor(request.width / 2),
+          request.y + Math.floor(request.height / 2),
+          1,
+          1,
+        ).data[3] === 0,
     );
   } catch {
     return null;
   }
 }
 
+function hasBlankImagery(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+): boolean {
+  if (!('getImageData' in ctx) || typeof ctx.getImageData !== 'function') return false;
+  try {
+    const width = Math.max(
+      1,
+      Math.floor((ctx as { canvas?: { width?: number } }).canvas?.width ?? 1),
+    );
+    const height = Math.max(
+      1,
+      Math.floor((ctx as { canvas?: { height?: number } }).canvas?.height ?? 1),
+    );
+    const samples: number[] = [];
+    for (let y = 0; y < height; y += Math.max(1, Math.floor(height / 12))) {
+      for (let x = 0; x < width; x += Math.max(1, Math.floor(width / 12))) {
+        samples.push(...ctx.getImageData(x, y, 1, 1).data);
+      }
+    }
+    return isMostlyBlank(samples, 4);
+  } catch {
+    return false;
+  }
+}
+
 /** Captures NAIP exportImage mosaics, falling back to USGS tiles on missing data/errors. */
 export async function captureSatelliteView(options: CaptureOptions): Promise<CaptureResult> {
-  const {
-    bounds,
-    signal,
-    onProgress,
-    placeName,
-    date,
-  } = options;
+  const { bounds, signal, onProgress, placeName, date } = options;
 
   if (signal?.aborted) {
     throw new DOMException('Capture aborted', 'AbortError');
   }
 
   const useNaip = options.providerId === 'naip';
-  const zoom = options.zoom ?? (useNaip ? computeOptimalNaipZoom(bounds) : computeOptimalZoom(bounds));
+  const imagerySource = options.imagerySource;
+  const useArcGis = !!imagerySource;
+  const centerLat = (bounds.north + bounds.south) / 2;
+  const requestedResolution = imagerySource
+    ? achievableImageryResolution(
+        mercatorBounds(bounds),
+        imagerySource.nominalResolutionM,
+        imagerySource.maxSize,
+        {
+          maxLongSide: MAX_NAIP_CAPTURE_LONG_SIDE,
+          maxRequests: MAX_NAIP_EXPORT_REQUESTS,
+        },
+      )
+    : NAIP_GROUND_RESOLUTION_M;
+  const serviceZoom = Math.log2(
+    (EQUATOR_METERS * Math.cos(centerLat * D2R)) / (TILE_SIZE * requestedResolution),
+  );
+  const zoom =
+    options.zoom ??
+    (useArcGis
+      ? serviceZoom
+      : useNaip
+        ? computeOptimalNaipZoom(bounds)
+        : computeOptimalZoom(bounds));
   const dims = getCaptureDimensions(bounds, zoom);
   const naipRequests = useNaip ? planNaipRequests(dims) : [];
+  const servicePlan = useArcGis
+    ? planServiceRequests(
+        mercatorBounds(bounds),
+        groundResolution(centerLat, zoom),
+        imagerySource.maxSize,
+        imagerySource.nominalResolutionM,
+      )
+    : [];
 
-  const maxLongSide = useNaip ? MAX_NAIP_CAPTURE_LONG_SIDE : MAX_CAPTURE_LONG_SIDE;
+  const maxLongSide = useNaip || useArcGis ? MAX_NAIP_CAPTURE_LONG_SIDE : MAX_CAPTURE_LONG_SIDE;
   if (Math.max(dims.width, dims.height) > maxLongSide) {
     throw new Error(`Capture size ${dims.width}×${dims.height} exceeds max side ${maxLongSide} px`);
   }
-  if (!useNaip && dims.tileCount > MAX_CAPTURE_TILES) {
+  if (!useNaip && !useArcGis && dims.tileCount > MAX_CAPTURE_TILES) {
     throw new Error(`Tile count ${dims.tileCount} exceeds max limit ${MAX_CAPTURE_TILES} tiles`);
   }
   if (useNaip && naipRequests.length > MAX_NAIP_EXPORT_REQUESTS) {
-    throw new Error(`NAIP capture needs ${naipRequests.length} requests; limit is ${MAX_NAIP_EXPORT_REQUESTS}`);
+    throw new Error(
+      `NAIP capture needs ${naipRequests.length} requests; limit is ${MAX_NAIP_EXPORT_REQUESTS}`,
+    );
+  }
+  if (useArcGis && servicePlan.length > MAX_NAIP_EXPORT_REQUESTS) {
+    throw new Error(
+      `Imagery capture needs ${servicePlan.length} requests; limit is ${MAX_NAIP_EXPORT_REQUESTS}`,
+    );
   }
 
   // Create canvas
@@ -574,7 +753,11 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
       strokeRect: () => {},
     };
     ctx = mockCtx as unknown as AnyCtx;
-    if (canvas && !('convertToBlob' in canvas) && typeof (canvas as HTMLCanvasElement).toBlob !== 'function') {
+    if (
+      canvas &&
+      !('convertToBlob' in canvas) &&
+      typeof (canvas as HTMLCanvasElement).toBlob !== 'function'
+    ) {
       (canvas as unknown as { toBlob: (cb: (b: Blob) => void) => void }).toBlob = (cb) => {
         cb(new Blob(['fake-png'], { type: 'image/png' }));
       };
@@ -582,7 +765,7 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
   }
 
   // Transparent NAIP pixels reveal that the service returned no data; USGS tiles use white.
-  if (useNaip && 'clearRect' in ctx && typeof ctx.clearRect === 'function') {
+  if ((useNaip || useArcGis) && 'clearRect' in ctx && typeof ctx.clearRect === 'function') {
     ctx.clearRect(0, 0, dims.width, dims.height);
   } else {
     ctx.fillStyle = '#ffffff';
@@ -597,50 +780,89 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
     readonly width?: number;
     readonly height?: number;
     readonly bbox?: readonly [number, number, number, number];
+    readonly serviceRequest?: ServiceRequest;
   }
 
-  const tileJobs: TileJob[] = useNaip
-    ? naipRequests.map((request) => ({
-        tx: request.x,
-        ty: request.y,
-        destX: request.x,
-        destY: request.y,
-        width: request.width,
-        height: request.height,
-        bbox: request.bbox,
-      }))
-    : [];
-  if (!useNaip) {
+  const tileJobs: TileJob[] =
+    useNaip || useArcGis
+      ? (useArcGis ? servicePlan : naipRequests).map((request) => ({
+          tx: request.x,
+          ty: request.y,
+          destX: request.x,
+          destY: request.y,
+          width: request.width,
+          height: request.height,
+          ...(useArcGis
+            ? { serviceRequest: request as ServiceRequest }
+            : { bbox: (request as NaipRequest).bbox }),
+        }))
+      : [];
+  if (!useNaip && !useArcGis) {
     for (let ty = dims.tileYMin; ty <= dims.tileYMax; ty++) {
       for (let tx = dims.tileXMin; tx <= dims.tileXMax; tx++) {
-        tileJobs.push({ tx, ty, destX: tx * TILE_SIZE - dims.xMin, destY: ty * TILE_SIZE - dims.yMin });
+        tileJobs.push({
+          tx,
+          ty,
+          destX: tx * TILE_SIZE - dims.xMin,
+          destY: ty * TILE_SIZE - dims.yMin,
+        });
       }
     }
   }
 
-  onProgress?.({ loaded: 0, total: tileJobs.length, stage: useNaip ? 'Fetching USGS NAIP imagery…' : 'Fetching satellite tiles…' });
+  onProgress?.({
+    loaded: 0,
+    total: tileJobs.length,
+    stage: useArcGis
+      ? `Fetching ${imagerySource.name}…`
+      : useNaip
+        ? 'Fetching USGS NAIP imagery…'
+        : 'Fetching satellite tiles…',
+  });
 
   const tileFetcher = options.tileLoader ?? defaultFetchTile;
   const naipFetcher = options.naipRequestLoader ?? defaultFetchNaipImage;
   let missingTiles = 0;
+  let serviceFailureReason: string | undefined;
 
   await runWithConcurrency(
     tileJobs,
-    useNaip ? MAX_NAIP_CONCURRENT_REQUESTS : MAX_CONCURRENT_REQUESTS,
+    useArcGis
+      ? MAX_ARCGIS_CONCURRENT_REQUESTS
+      : useNaip
+        ? MAX_NAIP_CONCURRENT_REQUESTS
+        : MAX_CONCURRENT_REQUESTS,
     async (job) => {
       if (signal?.aborted) {
         throw new DOMException('Capture aborted', 'AbortError');
       }
       try {
-        const imageSource = useNaip
-          ? options.naipRequestLoader
-            ? await naipFetcher(job.bbox!, [job.width!, job.height!], signal)
-            : options.tileLoader
-              ? await tileFetcher(Math.floor(job.tx / TILE_SIZE), Math.floor(job.ty / TILE_SIZE), zoom, signal)
-              : await naipFetcher(job.bbox!, [job.width!, job.height!], signal)
-          : await tileFetcher(job.tx, job.ty, zoom, signal);
+        const imageSource = useArcGis
+          ? await (options.serviceRequestLoader ?? defaultFetchArcGisImage)(
+              imagerySource,
+              job.serviceRequest!,
+              signal,
+            )
+          : useNaip
+            ? options.naipRequestLoader
+              ? await naipFetcher(job.bbox!, [job.width!, job.height!], signal)
+              : options.tileLoader
+                ? await tileFetcher(
+                    Math.floor(job.tx / TILE_SIZE),
+                    Math.floor(job.ty / TILE_SIZE),
+                    zoom,
+                    signal,
+                  )
+                : await naipFetcher(job.bbox!, [job.width!, job.height!], signal)
+            : await tileFetcher(job.tx, job.ty, zoom, signal);
         if (imageSource && ctx) {
-          ctx.drawImage(imageSource, job.destX, job.destY, job.width ?? TILE_SIZE, job.height ?? TILE_SIZE);
+          ctx.drawImage(
+            imageSource,
+            job.destX,
+            job.destY,
+            job.width ?? TILE_SIZE,
+            job.height ?? TILE_SIZE,
+          );
           if ('close' in imageSource && typeof imageSource.close === 'function') {
             imageSource.close();
           }
@@ -648,8 +870,9 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
           missingTiles++;
           drawMissingTileGap(ctx, job.destX, job.destY);
         }
-      } catch {
+      } catch (error) {
         missingTiles++;
+        if (useArcGis && error instanceof Error) serviceFailureReason ??= error.message;
         if (ctx && !useNaip) {
           drawMissingTileGap(ctx, job.destX, job.destY);
         }
@@ -660,15 +883,46 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
       onProgress?.({
         loaded: done,
         total,
-        stage: `Fetching ${useNaip ? 'NAIP images' : 'satellite tiles'} (${done}/${total})…`,
+        stage: `Fetching ${useArcGis ? imagerySource.name : useNaip ? 'NAIP images' : 'satellite tiles'} (${done}/${total})…`,
       });
-    }
+    },
   );
 
   const noNaipPixels = useNaip && hasMissingNaipData(ctx, naipRequests) === true;
   if (useNaip && (isNaipCoverageFallbackNeeded(missingTiles) || noNaipPixels)) {
-    const fallback = await captureSatelliteView({ ...options, providerId: 'usgs', zoom: undefined });
+    const fallback = await captureSatelliteView({
+      ...options,
+      providerId: 'usgs',
+      zoom: undefined,
+    });
     return { ...fallback, fallbackReason: 'NAIP not available here; using USGS 2.1 m' };
+  }
+  if (useArcGis && serviceFailureReason) {
+    if (imagerySource.id.startsWith('custom:')) {
+      throw new Error(`Could not capture ${imagerySource.name}: ${serviceFailureReason}`);
+    }
+    const fallback = await captureSatelliteView({
+      ...options,
+      imagerySource: undefined,
+      providerId: 'naip',
+      zoom: undefined,
+    });
+    return {
+      ...fallback,
+      fallbackReason: `${imagerySource.name} could not be reached (${serviceFailureReason}); using USGS NAIP where available`,
+    };
+  }
+  if (useArcGis && (missingTiles > 0 || hasBlankImagery(ctx))) {
+    const fallback = await captureSatelliteView({
+      ...options,
+      imagerySource: undefined,
+      providerId: 'naip',
+      zoom: undefined,
+    });
+    return {
+      ...fallback,
+      fallbackReason: `${imagerySource.name} returned blank or nodata imagery; using USGS NAIP where available`,
+    };
   }
 
   const acquisitionYear = useNaip
@@ -706,11 +960,13 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
     zoom,
     bounds,
     anchors,
-    attribution: useNaip ? DEFAULT_NAIP_ATTRIBUTION : DEFAULT_USGS_ATTRIBUTION,
+    attribution:
+      imagerySource?.attribution ?? (useNaip ? DEFAULT_NAIP_ATTRIBUTION : DEFAULT_USGS_ATTRIBUTION),
     missingTiles,
     fileName,
     projectName,
-    source: useNaip ? 'naip' : 'usgs',
+    source: imagerySource ? 'arcgis' : useNaip ? 'naip' : 'usgs',
+    ...(imagerySource?.year === undefined ? {} : { acquisitionYear: imagerySource.year }),
     ...(acquisitionYear === undefined ? {} : { acquisitionYear }),
   };
 }
@@ -721,7 +977,7 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
  */
 export async function buildSatelliteProject(
   result: CaptureResult,
-  now = new Date().toISOString()
+  now = new Date().toISOString(),
 ): Promise<{ project: Project; map: LoadedMap }> {
   const map = await loadImageFile(result.blob, result.fileName);
 

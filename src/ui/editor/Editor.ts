@@ -9,7 +9,29 @@ import { hitAnchor, hitHandle } from './hit';
 import { LongPressRecognizer, LONG_PRESS_TOLERANCE_PX } from './long-press';
 import { LineLayer } from './layer';
 import { renderFrame, type RenderModel } from './render';
-import { centerOn, fitView, panBy, toImg, toScr, zoomAt, type Screen, type View } from './view';
+import {
+  centerOn,
+  fitView,
+  panBy,
+  preserveCenterOnResize,
+  toImg,
+  toScr,
+  zoomAt,
+  type Screen,
+  type View,
+} from './view';
+import { inverse } from '../../core/geo/fit';
+import { loadSettings, subscribeSettings } from '../../io/settings';
+import { SATELLITE_PROVIDERS } from '../georef/satellite';
+import {
+  drawAffineTile,
+  drawWarpTriangle,
+  coveringTilesForFit,
+  tileLatLon,
+  tileZoom,
+  TileLru,
+  type EsriTile,
+} from '../georef/esriBackdrop';
 
 /** Zoom idle time (ms) before the line layer is re-rasterized at the new scale. */
 export const ZOOM_SETTLE_MS = 150;
@@ -128,6 +150,9 @@ export class Editor {
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
   /** CPU time of the last renderNow call, ms (excludes GPU rasterization). */
   lastFrameMs = 0;
+  private readonly esriTiles = new TileLru<ImageBitmap>(256);
+  private readonly pendingEsri = new Map<string, HTMLImageElement>();
+  private esriApiKey: string | undefined;
   private hops: HopProvider | null = null;
   /** Set after a right-button drag, so the contextmenu that follows it on release is swallowed. */
   private swallowContextMenu = false;
@@ -143,6 +168,16 @@ export class Editor {
   }
 
   constructor(private readonly store = appStore) {
+    this.esriApiKey = loadSettings().basemap.esriApiKey?.trim();
+    this.cleanups.push(
+      subscribeSettings((settings) => {
+        const key = settings.basemap.esriApiKey?.trim();
+        if (key !== this.esriApiKey) {
+          this.esriApiKey = key;
+          this.invalidate();
+        }
+      }),
+    );
     this.longPress = new LongPressRecognizer((_id, start) => {
       const press = this.press;
       if (!press || press.pointerType !== 'touch' || press.target?.kind !== 'vertex') return;
@@ -286,12 +321,19 @@ export class Editor {
     const c = this.canvas;
     if (!c) return;
     const r = c.getBoundingClientRect();
+    // Hidden tab panes report zero dimensions. Keep the last usable canvas size and view so
+    // showing the map tab again preserves its center instead of treating it as a fresh fit.
+    if (r.width <= 0 || r.height <= 0) return;
+    const oldWidth = this.cw;
+    const oldHeight = this.ch;
+    const resizedView = preserveCenterOnResize(this.v, oldWidth, oldHeight, r.width, r.height);
     this.dpr = window.devicePixelRatio || 1;
     this.cw = r.width;
     this.ch = r.height;
     c.width = Math.max(1, Math.round(r.width * this.dpr));
     c.height = Math.max(1, Math.round(r.height * this.dpr));
     if (this.needsFit) this.fitView();
+    else if (r.width !== oldWidth || r.height !== oldHeight) this.setView(resizedView);
     this.invalidate();
   }
 
@@ -317,7 +359,10 @@ export class Editor {
       s.anchorDragging !== prev.anchorDragging ||
       s.vertexFocus !== prev.vertexFocus ||
       s.simplifyPreview !== prev.simplifyPreview ||
+      s.refinePreview !== prev.refinePreview ||
       s.keyboardMode !== prev.keyboardMode ||
+      s.editorBackdrop !== prev.editorBackdrop ||
+      s.editorMapOpacity !== prev.editorMapOpacity ||
       s.tool !== prev.tool
     ) {
       this.invalidate();
@@ -342,8 +387,15 @@ export class Editor {
     const now = performance.now();
     const zoomSettled = now - this.lastZoom >= ZOOM_SETTLE_MS;
     const panSettled = now - this.lastPan >= PAN_SETTLE_MS;
-    renderFrame(this.ctx, this.model(), this.v, this.dpr, (ctx) =>
-      this.lines.draw(ctx, this.v, this.dpr, this.cw, this.ch, content, zoomSettled, panSettled),
+    renderFrame(
+      this.ctx,
+      this.model(),
+      this.v,
+      this.dpr,
+      (ctx) =>
+        this.lines.draw(ctx, this.v, this.dpr, this.cw, this.ch, content, zoomSettled, panSettled),
+      (ctx) => this.drawEsri(ctx),
+      s.editorBackdrop === 'esri' ? (s.editorMapOpacity ?? 0) : 1,
     );
     // Mid-zoom the layer is shown scaled, and a fast/long drag can leave it uncovered past the
     // margin; re-rasterize once whichever gesture has settled.
@@ -359,6 +411,145 @@ export class Editor {
       );
     }
     this.lastFrameMs = performance.now() - t0;
+  }
+
+  private drawEsri(ctx: CanvasRenderingContext2D): void {
+    const state = this.store.getState();
+    const fit = selectFit(state);
+    const key = this.esriApiKey;
+    const project = state.session?.project.image;
+    if (state.editorBackdrop !== 'esri' || !fit?.ok || !key || !project) {
+      for (const image of this.pendingEsri.values()) {
+        image.onload = null;
+        image.onerror = null;
+        image.src = '';
+      }
+      this.pendingEsri.clear();
+      return;
+    }
+    const provider = SATELLITE_PROVIDERS.esri;
+    const z = tileZoom(fit.metersPerPixel, this.v.s, this.dpr, fit.frame.lat0, provider.maxZoom);
+    const screenCorners: Screen[] = [
+      [0, 0],
+      [this.cw, 0],
+      [this.cw, this.ch],
+      [0, this.ch],
+    ];
+    const region: Px[] = screenCorners.map((p) => toImg(this.v, p));
+    const { tiles: visible } = coveringTilesForFit(
+      fit,
+      project.width,
+      project.height,
+      z,
+      64,
+      region,
+    );
+    const wanted = new Set(visible.map((t) => `${t.z}/${t.x}/${t.y}`));
+    for (const [id, image] of this.pendingEsri)
+      if (!wanted.has(id)) {
+        image.onload = null;
+        image.onerror = null;
+        image.src = '';
+        this.pendingEsri.delete(id);
+      }
+    for (const tile of visible) {
+      const id = `${tile.z}/${tile.x}/${tile.y}`;
+      const bitmap = this.esriTiles.get(id);
+      if (bitmap) {
+        this.drawEsriTile(ctx, fit, tile, bitmap);
+        continue;
+      }
+      if (!this.pendingEsri.has(id)) this.loadEsriTile(tile, key);
+    }
+  }
+
+  private drawEsriTile(
+    ctx: CanvasRenderingContext2D,
+    fit: NonNullable<ReturnType<typeof selectFit>> & { ok: true },
+    tile: EsriTile,
+    bitmap: ImageBitmap,
+  ): void {
+    if (fit.model.kind !== 'tps') {
+      const corners = [
+        inverse(fit, tileLatLon(tile, 0, 0)),
+        inverse(fit, tileLatLon(tile, 1, 0)),
+        inverse(fit, tileLatLon(tile, 0, 1)),
+      ];
+      const [nw, ne, sw] = corners;
+      if (nw && ne && sw) drawAffineTile(ctx, bitmap, bitmap.width, bitmap.height, nw, ne, sw);
+      return;
+    }
+    const n = 4;
+    const pxAt = (u: number, v: number) => inverse(fit, tileLatLon(tile, u, v));
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        const u0 = x / n,
+          u1 = (x + 1) / n,
+          v0 = y / n,
+          v1 = (y + 1) / n;
+        const p00 = pxAt(u0, v0),
+          p10 = pxAt(u1, v0),
+          p11 = pxAt(u1, v1),
+          p01 = pxAt(u0, v1);
+        if (!p00 || !p10 || !p11 || !p01) continue;
+        const sx0 = u0 * bitmap.width,
+          sx1 = u1 * bitmap.width,
+          sy0 = v0 * bitmap.height,
+          sy1 = v1 * bitmap.height;
+        drawWarpTriangle(
+          ctx,
+          bitmap,
+          [
+            [sx0, sy0],
+            [sx1, sy0],
+            [sx1, sy1],
+          ],
+          [p00, p10, p11],
+          0.5 / (this.dpr * this.v.s),
+        );
+        drawWarpTriangle(
+          ctx,
+          bitmap,
+          [
+            [sx0, sy0],
+            [sx1, sy1],
+            [sx0, sy1],
+          ],
+          [p00, p11, p01],
+          0.5 / (this.dpr * this.v.s),
+        );
+      }
+  }
+
+  private loadEsriTile(tile: EsriTile, key: string): void {
+    const id = `${tile.z}/${tile.x}/${tile.y}`;
+    const image = new Image();
+    this.pendingEsri.set(id, image);
+    image.crossOrigin = 'anonymous';
+    image.onload = () => {
+      if (this.pendingEsri.get(id) !== image) return;
+      void createImageBitmap(image)
+        .then((bitmap) => {
+          if (this.pendingEsri.get(id) !== image) {
+            bitmap.close();
+            return;
+          }
+          this.esriTiles.set(id, bitmap);
+          this.pendingEsri.delete(id);
+          this.invalidate();
+        })
+        .catch(() => {
+          if (this.pendingEsri.get(id) === image) this.pendingEsri.delete(id);
+        });
+    };
+    image.onerror = () => {
+      if (this.pendingEsri.get(id) === image) this.pendingEsri.delete(id);
+    };
+    const url = SATELLITE_PROVIDERS.esri.tileUrl
+      .replace('{z}', String(tile.z))
+      .replace('{x}', String(tile.x))
+      .replace('{y}', String(tile.y));
+    image.src = `${url}?token=${encodeURIComponent(key)}`;
   }
 
   private model(): RenderModel {
@@ -381,6 +572,7 @@ export class Editor {
       focusedVertex: s.vertexFocus,
       centerCrosshair: s.keyboardMode && placementTool && !s.draft,
       simplifyPreview: s.simplifyPreview ?? null,
+      refinePreview: s.refinePreview ?? null,
       connectPreview: s.connectSession?.connector ?? null,
     };
   }

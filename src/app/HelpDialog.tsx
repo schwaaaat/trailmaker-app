@@ -38,6 +38,8 @@ const OTHER_SHORTCUTS: readonly { keys: string; desc: string }[] = [
   },
   { keys: 'J', desc: 'Join the selected trail with the shift-selected second one' },
   { keys: 'F', desc: 'Fit the map to the view' },
+  { keys: 'Alt + Shift + R', desc: 'Refine the selected trail to the map image' },
+  { keys: 'Backslash', desc: 'Collapse or expand the steps panel on desktop' },
   { keys: '+ / -', desc: 'Zoom in or out' },
   { keys: 'Ctrl/Cmd + Z', desc: 'Undo' },
   { keys: 'Ctrl/Cmd + Shift + Z', desc: 'Redo' },
@@ -139,12 +141,7 @@ export function HelpDialog({ onResetInterface = resetInterface }: HelpDialogProp
           </div>
         ) : (
           <div className="row help-dialog-footer">
-            <button
-              ref={closeBtnRef}
-              type="button"
-              className="btn small primary"
-              onClick={close}
-            >
+            <button ref={closeBtnRef} type="button" className="btn small primary" onClick={close}>
               Close
             </button>
             <button
@@ -160,4 +157,3 @@ export function HelpDialog({ onResetInterface = resetInterface }: HelpDialogProp
     </div>
   );
 }
-

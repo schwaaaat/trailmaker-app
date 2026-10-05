@@ -59,13 +59,34 @@ export type MapSource =
   /** A bitmap file (PNG/JPG/WebP/…); mimeType is the original file's type. */
   | { readonly kind: 'image'; readonly mimeType: string }
   /** One page of a PDF rendered to a bitmap at renderScale (PDF points -> pixels). */
-  | { readonly kind: 'pdf'; readonly page: number; readonly pageCount: number; readonly renderScale: number };
+  | { readonly kind: 'pdf'; readonly page: number; readonly pageCount: number; readonly renderScale: number }
+  /**
+   * A Web Mercator tile set downloaded inside a boundary (D-039). Image Px [0,0] is world pixel
+   * `origin` at zoom `z`, so Px space is the full-resolution virtual raster, and MapImage.width/height
+   * may exceed MAX_WORKING_SIDE. The tiles live in browser storage (and optionally the project file),
+   * never in the project JSON.
+   */
+  | {
+      readonly kind: 'tiles';
+      /** Imagery source id (e.g. 'martin-county', or 'custom:<url>' for a pasted tiled service). */
+      readonly sourceId: string;
+      /** Web Mercator zoom of the full-resolution level. */
+      readonly z: number;
+      /** Tile edge in pixels (256 for ArcGIS caches). */
+      readonly tileSize: number;
+      /** World-pixel coordinates at `z` of image Px [0,0]. */
+      readonly origin: { readonly x: number; readonly y: number };
+      /** The boundary the user drew; only tiles intersecting it (plus a buffer) were downloaded. */
+      readonly boundary: readonly LatLon[];
+      /** Number of full-resolution tiles stored. */
+      readonly tileCount: number;
+    };
 
 /** Metadata about the map image a project traces over. The pixels themselves live outside the project JSON. */
 export interface MapImage {
   /** Display name, usually the file name without extension. */
   readonly fileName: string;
-  /** Working raster width in pixels (the coordinate space of every Px). */
+  /** Working raster width in pixels (the coordinate space of every Px). For 'tiles' maps, the full-resolution virtual width (D-039). */
   readonly width: number;
   /** Working raster height in pixels. */
   readonly height: number;
@@ -399,6 +420,47 @@ export interface SmartTraceResult {
   readonly ms: number;
 }
 
+/**
+ * Refine a hand-drawn line to the trail in the raster (T-327, D-038): least-cost paths constrained
+ * to a corridor around `pts`, keeping the hand line where the raster shows no trail.
+ */
+export interface RefineRequest extends TraceOptions {
+  /** Raster to refine against (worker handle); always the project raster, never live imagery. */
+  readonly imageId: ImageId;
+  /** The hand-drawn line, in image pixels. */
+  readonly pts: readonly Px[];
+  /** Half-width of the search corridor around `pts`, pixels. */
+  readonly corridorPx: number;
+  /** Ink to follow; null samples it along the line. */
+  readonly ink: Rgb | null;
+  /** Indices into `pts` that must not move (shared junction vertices). */
+  readonly pinned: readonly number[];
+}
+
+/** One run of the refined line, refined from the raster or kept from the hand line. */
+export interface RefineSegment {
+  /** First index into RefineResult.pts (inclusive). */
+  readonly from: number;
+  /** Last index into RefineResult.pts (inclusive). */
+  readonly to: number;
+  /** True when the raster supported a refined path here; false keeps the hand line. */
+  readonly refined: boolean;
+  /** Fraction of the path's pixels within tolerance of the ink, 0..1. */
+  readonly confidence: number;
+}
+
+/** Result of refining one line. */
+export interface RefineResult {
+  /** The refined line, in image pixels (pinned vertices unchanged). */
+  readonly pts: readonly Px[];
+  /** Consecutive runs covering `pts` end to end. */
+  readonly segments: readonly RefineSegment[];
+  /** Ink actually followed (sampled when the request's ink was null). */
+  readonly ink: Rgb;
+  /** Wall time spent in the worker, ms. */
+  readonly ms: number;
+}
+
 /** A color the scan found drawn as thin lines. */
 export interface ScannedColor {
   /** Mean color of the cluster. */
@@ -571,6 +633,8 @@ export interface WorkerApi {
   snapToInk(id: ImageId, at: Px, ink: Rgb, tolerance: number, radiusPx: number): Promise<Px | null>;
   /** One smart-follow hop. */
   smartTrace(req: SmartTraceRequest, ctl: JobControl): Promise<SmartTraceResult>;
+  /** Refine a hand-drawn line to the raster (T-327). */
+  refineTrail(req: RefineRequest, ctl: JobControl): Promise<RefineResult>;
   /** Find colors drawn as thin lines. */
   scanColors(id: ImageId, ctl: JobControl): Promise<ColorScanResult>;
   /** Auto-trace candidate lines for the given colors. */

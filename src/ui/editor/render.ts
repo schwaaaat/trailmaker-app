@@ -9,7 +9,13 @@ import {
   type FeatureId,
   type Px,
 } from '../../core/types';
-import type { CandidateSplitFocus, Draft, ReviewCandidate, VertexFocus } from '../../state/store';
+import type {
+  CandidateSplitFocus,
+  Draft,
+  RefinePreviewState,
+  ReviewCandidate,
+  VertexFocus,
+} from '../../state/store';
 import type { Screen, View } from './view';
 
 const BLAZE = '#F2B531';
@@ -44,6 +50,7 @@ export interface RenderModel {
   readonly centerCrosshair: boolean;
   /** Live simplify/smooth preview for the selected feature (T-222). */
   readonly simplifyPreview?: { readonly featureId: FeatureId; readonly pts: readonly Px[] } | null;
+  readonly refinePreview?: RefinePreviewState | null;
   readonly connectPreview?: readonly Px[] | null;
 }
 
@@ -59,15 +66,20 @@ export function renderFrame(
   v: View,
   dpr: number,
   lines: ((ctx: Ctx) => void) | null = null,
+  underlay: ((ctx: Ctx) => void) | null = null,
+  mapOpacity = 1,
 ): void {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   if (!m.image) return;
   ctx.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.x, dpr * v.y);
   ctx.imageSmoothingEnabled = v.s < SMOOTHING_MAX_ZOOM;
+  underlay?.(ctx);
   ctx.shadowColor = 'rgba(0,0,0,.25)';
   ctx.shadowBlur = 12 / v.s;
+  ctx.globalAlpha = Math.max(0, Math.min(1, mapOpacity));
   ctx.drawImage(m.image, 0, 0);
+  ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
 
@@ -93,6 +105,7 @@ export function renderFrame(
       ? m.simplifyPreview.pts
       : undefined;
   if (sel && sel.kind !== 'poi') drawFeature(ctx, v, sel, true, !lines, previewPts);
+  if (m.refinePreview) drawRefinePreview(ctx, v, m.refinePreview);
   const second = m.features.find(
     (f): f is LineFeature =>
       f.id === m.secondSelectedFeatureId && f.kind === 'trail' && f.id !== editId,
@@ -110,6 +123,24 @@ export function renderFrame(
   );
   if (m.focusedVertex) drawVertexFocus(ctx, v, m.features, m.focusedVertex);
   if (m.centerCrosshair) drawCenterCrosshair(ctx, ctx.canvas.width / dpr, ctx.canvas.height / dpr);
+}
+
+function drawRefinePreview(ctx: Ctx, v: View, preview: RefinePreviewState): void {
+  for (const entry of preview.entries) {
+    for (const part of entry.parts) {
+      const pts = part.useRefined ? part.refinedPts : part.originalPts;
+      if (pts.length < 2) continue;
+      pathOf(ctx, v, pts, false);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 8;
+      ctx.stroke();
+      ctx.strokeStyle = part.useRefined ? '#19A974' : '#F2B531';
+      ctx.lineWidth = 4;
+      ctx.setLineDash(part.useRefined ? [] : [8, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
 }
 
 function drawConnectPreview(ctx: Ctx, v: View, pts: readonly Px[]): void {

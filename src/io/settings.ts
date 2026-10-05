@@ -30,7 +30,8 @@ export const RESET_INTERFACE_NOTE =
   'Your project, map images, traced trails, and saved files are not touched.';
 
 export const DEFAULT_BASEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-export const DEFAULT_GEOCODER_SERVICE_URL = 'https://nominatim.openstreetmap.org/search?format=jsonv2';
+export const DEFAULT_GEOCODER_SERVICE_URL =
+  'https://nominatim.openstreetmap.org/search?format=jsonv2';
 export const DEFAULT_OVERLAY_OPACITY = 0.6; // 60% default per T-309
 export const DEFAULT_BASEMAP_IMAGERY: BasemapImageryType = 'vector';
 export const DEFAULT_SATELLITE_PROVIDER: SatelliteProviderId = 'naip';
@@ -45,6 +46,8 @@ export interface BasemapSettings {
   satelliteProvider: SatelliteProviderId; // 'usgs' | 'naip' | 'esri'
   /** User-owned Esri access token. Stored locally in browser settings only. */
   esriApiKey?: string;
+  /** User supplied ArcGIS imagery URL; credentials and map data are never persisted here. */
+  customImageryUrl?: string;
   lastCenter?: [number, number]; // [lng, lat]
   lastZoom?: number;
   opacity: number; // 0..1
@@ -123,8 +126,14 @@ export function loadSettings(): AppSettings {
     }
 
     const obj = parsed as Record<string, unknown>;
-    const basemapObj = (obj.basemap && typeof obj.basemap === 'object') ? (obj.basemap as Record<string, unknown>) : null;
-    const geocoderObj = (obj.geocoder && typeof obj.geocoder === 'object') ? (obj.geocoder as Record<string, unknown>) : null;
+    const basemapObj =
+      obj.basemap && typeof obj.basemap === 'object'
+        ? (obj.basemap as Record<string, unknown>)
+        : null;
+    const geocoderObj =
+      obj.geocoder && typeof obj.geocoder === 'object'
+        ? (obj.geocoder as Record<string, unknown>)
+        : null;
 
     const imagery: BasemapImageryType =
       basemapObj && (basemapObj.imagery === 'vector' || basemapObj.imagery === 'satellite')
@@ -134,6 +143,10 @@ export function loadSettings(): AppSettings {
     const esriApiKey =
       basemapObj && typeof basemapObj.esriApiKey === 'string'
         ? basemapObj.esriApiKey.trim() || undefined
+        : undefined;
+    const customImageryUrl =
+      basemapObj && typeof basemapObj.customImageryUrl === 'string'
+        ? basemapObj.customImageryUrl.trim() || undefined
         : undefined;
 
     const requestedSatelliteProvider: SatelliteProviderId =
@@ -149,18 +162,22 @@ export function loadSettings(): AppSettings {
         : requestedSatelliteProvider;
 
     const basemap: BasemapSettings = {
-      enabled: basemapObj && typeof basemapObj.enabled === 'boolean'
-        ? basemapObj.enabled
-        : defaults.basemap.enabled,
-      styleUrl: basemapObj && typeof basemapObj.styleUrl === 'string'
-        ? basemapObj.styleUrl.trim() || defaults.basemap.styleUrl
-        : defaults.basemap.styleUrl,
+      enabled:
+        basemapObj && typeof basemapObj.enabled === 'boolean'
+          ? basemapObj.enabled
+          : defaults.basemap.enabled,
+      styleUrl:
+        basemapObj && typeof basemapObj.styleUrl === 'string'
+          ? basemapObj.styleUrl.trim() || defaults.basemap.styleUrl
+          : defaults.basemap.styleUrl,
       imagery,
       satelliteProvider,
       ...(esriApiKey ? { esriApiKey } : {}),
-      opacity: basemapObj && typeof basemapObj.opacity === 'number'
-        ? Math.max(0, Math.min(1, basemapObj.opacity))
-        : defaults.basemap.opacity,
+      ...(customImageryUrl ? { customImageryUrl } : {}),
+      opacity:
+        basemapObj && typeof basemapObj.opacity === 'number'
+          ? Math.max(0, Math.min(1, basemapObj.opacity))
+          : defaults.basemap.opacity,
     };
 
     if (basemapObj && Array.isArray(basemapObj.lastCenter) && basemapObj.lastCenter.length === 2) {
@@ -175,12 +192,14 @@ export function loadSettings(): AppSettings {
     }
 
     const geocoder: GeocoderSettings = {
-      enabled: geocoderObj && typeof geocoderObj.enabled === 'boolean'
-        ? geocoderObj.enabled
-        : defaults.geocoder.enabled,
-      serviceUrl: geocoderObj && typeof geocoderObj.serviceUrl === 'string'
-        ? geocoderObj.serviceUrl.trim() || defaults.geocoder.serviceUrl
-        : defaults.geocoder.serviceUrl,
+      enabled:
+        geocoderObj && typeof geocoderObj.enabled === 'boolean'
+          ? geocoderObj.enabled
+          : defaults.geocoder.enabled,
+      serviceUrl:
+        geocoderObj && typeof geocoderObj.serviceUrl === 'string'
+          ? geocoderObj.serviceUrl.trim() || defaults.geocoder.serviceUrl
+          : defaults.geocoder.serviceUrl,
     };
 
     const result: AppSettings = { basemap, geocoder };

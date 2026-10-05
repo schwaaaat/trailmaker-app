@@ -3,13 +3,21 @@ import { expect, test } from './network-fixture';
 import { installOfflineBasemap, offlineStylePath } from './offline-basemap';
 import { openReadyApp } from './app-ready';
 import { validateGpx } from '../metrics/xml';
-import { IMAGERY_HOSTS, isNaipExport, isUsgsTile, stubImagery } from './imagery-stubs';
+import {
+  IMAGERY_HOSTS,
+  isNaipExport,
+  isUsgsTile,
+  stubImagery,
+  isMartinExport,
+} from './imagery-stubs';
 
 // T-318 acceptance (Integrator); gating since T-318 merged. From T-320 the US default capture
 // source is NAIP (exportImage), with USGS basemap tiles as the fallback; either counts here.
 test.use({ stubbedHosts: IMAGERY_HOSTS });
 
-test('Make map from scratch via satellite capture, trace, and export GPX [T-318]', async ({ page }) => {
+test('Make map from scratch via satellite capture, trace, and export GPX [T-318]', async ({
+  page,
+}) => {
   test.setTimeout(90_000);
   await installOfflineBasemap(page);
   const tiles: string[] = [];
@@ -46,12 +54,21 @@ test('Make map from scratch via satellite capture, trace, and export GPX [T-318]
   await captureBtn.click();
 
   // Project opens with 9 anchors and satellite name
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.anchors.length)).toBe(9);
-  const projectName = await page.evaluate(() => window.__trailmaker?.session.getSession()?.project.name);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__trailmaker?.session.getSession()?.project.anchors.length),
+    )
+    .toBe(9);
+  const projectName = await page.evaluate(
+    () => window.__trailmaker?.session.getSession()?.project.name,
+  );
   expect(projectName).toMatch(/^Satellite /);
-  expect(tiles.some((u) => isUsgsTile(u) || isNaipExport(u))).toBe(true);
+  // Whichever source the frame selects: USGS tiles, NAIP, or Martin County (T-326).
+  expect(tiles.some((u) => isUsgsTile(u) || isNaipExport(u) || isMartinExport(u))).toBe(true);
   // Every auto-anchor has real coordinates, all inside the framed area.
-  const anchors = await page.evaluate(() => window.__trailmaker!.session.getSession()!.project.anchors.map((a) => a.ll));
+  const anchors = await page.evaluate(() =>
+    window.__trailmaker!.session.getSession()!.project.anchors.map((a) => a.ll),
+  );
   for (const ll of anchors) {
     expect(ll).not.toBeNull();
     expect(Math.abs(ll![0] - 27.135)).toBeLessThan(0.1);
@@ -59,15 +76,30 @@ test('Make map from scratch via satellite capture, trace, and export GPX [T-318]
   }
 
   // Trace one trail and finish
-  await page.getByRole('toolbar', { name: 'Map tools' }).getByRole('button', { name: 'Trail', exact: true }).click();
+  await page
+    .getByRole('toolbar', { name: 'Map tools' })
+    .getByRole('button', { name: 'Trail', exact: true })
+    .click();
   const canvas = page.locator('.stage-editor canvas').first();
   const box = (await canvas.boundingBox())!;
   expect(box, 'editor canvas is on screen').toBeTruthy();
   await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.4);
   await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
   await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6);
-  await page.getByRole('group', { name: 'Drawing' }).getByRole('button', { name: /Finish trail/ }).click();
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.features.filter((f) => f.kind === 'trail').length)).toBe(1);
+  await page
+    .getByRole('group', { name: 'Drawing' })
+    .getByRole('button', { name: /Finish trail/ })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__trailmaker?.session
+            .getSession()
+            ?.project.features.filter((f) => f.kind === 'trail').length,
+      ),
+    )
+    .toBe(1);
 
   // Export GPX
   const steps = page.getByRole('complementary', { name: 'Steps' });

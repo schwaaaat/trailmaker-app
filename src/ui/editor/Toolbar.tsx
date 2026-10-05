@@ -7,6 +7,7 @@ import { useApp } from '../../state/hooks';
 import { setHelpOpen, type Tool } from '../../state/store';
 import { currentEditor } from './EditorStage';
 import { chooseTool, redoAction, tipFor, undoAction } from './tools';
+import { startRefinement } from '../panels/refine-actions';
 
 export { TOUCH_HINT_STORAGE_KEY };
 
@@ -85,6 +86,38 @@ export function Toolbar() {
   const canUndo = useApp((s) => s.history.canUndo);
   const canRedo = useApp((s) => s.history.canRedo);
   const reviewCanUndo = useApp((s) => s.reviewUndoStack.length > 0);
+  const selectedTrail = useApp(
+    (s) =>
+      s.session?.project.features.find(
+        (feature) => feature.id === s.selectedFeatureId && feature.kind === 'trail',
+      ) ?? null,
+  );
+  const refinementBlocked = useApp(
+    (s) => s.job !== null || s.refinePreview !== null || s.draft !== null,
+  );
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        event.shiftKey &&
+        event.altKey &&
+        event.key.toLowerCase() === 'r' &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !(
+          target instanceof HTMLElement &&
+          (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+        )
+      ) {
+        if (selectedTrail && !refinementBlocked) {
+          event.preventDefault();
+          void startRefinement([selectedTrail.id]);
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [selectedTrail, refinementBlocked]);
   // The map-tool buttons need an open session; the "Keyboard shortcuts" help below (T-215) does
   // not, so the toolbar landmark and that one button stay mounted either way -- a user can check
   // the shortcuts before opening a map.
@@ -111,7 +144,6 @@ export function Toolbar() {
               </button>
             </span>
           ))}
-          <span className="sep" aria-hidden="true" />
           <button
             type="button"
             aria-label="Fit map to view"

@@ -11,6 +11,8 @@ import {
   type Px,
   type RasterImage,
   type Rgb,
+  type RefineRequest,
+  type RefineResult,
   type SmartTraceRequest,
   type SmartTraceResult,
   type WorkerApi,
@@ -18,6 +20,7 @@ import {
 import { buildKmz as writeKmz } from '../core/export/kmz';
 import { pickInk as pickImageInk, snapToInk } from '../core/trace/ink';
 import { tracePath } from '../core/trace/astar';
+import { refineLine } from '../core/trace/refine';
 import { scanColors } from '../core/trace/scan';
 import { autoTraceColor, deriveDefaultAutoTraceOptions } from '../core/trace/autotrace';
 import { mergeCrossColorCandidates } from '../core/trace/crosscolor';
@@ -208,6 +211,22 @@ export function createWorkerApi(kmzWriter: typeof writeKmz = writeKmz): WorkerAp
           hooks,
         );
         return { path, snappedTo, ms: performance.now() - started } satisfies SmartTraceResult;
+      });
+    },
+    refineTrail: async (request: RefineRequest, control) => {
+      const image = imageFor(request.imageId);
+      return await runJob(control, (hooks) => {
+        const started = performance.now();
+        const result = refineLine(
+          image,
+          request.pts,
+          request.corridorPx,
+          request.ink,
+          request.tolerance,
+          request.pinned,
+          hooks,
+        );
+        return { ...result, ms: performance.now() - started } satisfies RefineResult;
       });
     },
     scanColors: async (id, control) => {

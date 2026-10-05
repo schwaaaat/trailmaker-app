@@ -106,6 +106,8 @@ describe('resetInterface (card T-224, D-030)', () => {
         show: false,
         mode: 'pair',
         frac: 0.55,
+        stageMode: 'tabs',
+        stepsCollapsed: false,
       });
 
       // Hint subscriber fired with false (expanded)

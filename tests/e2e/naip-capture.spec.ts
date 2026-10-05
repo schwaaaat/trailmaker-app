@@ -34,14 +34,20 @@ test('Start from satellite captures NAIP with its credit and year, and KML carri
   await page.getByRole('button', { name: 'Start from satellite' }).first().click();
   const overlay = page.getByRole('dialog', { name: 'Capture satellite map' });
   await expect(overlay).toBeVisible();
+  // Seabranch is inside Martin County's 3-inch coverage (T-326); this spec is about NAIP.
+  const source = overlay.getByLabel('Capture imagery source');
+  if (await source.count()) await source.selectOption('naip');
   await expect(overlay).toContainText(/NAIP/);
   await expect(overlay).not.toContainText('NAIP not available here');
   await overlay.getByRole('button', { name: 'Capture map' }).click();
 
   await expect
-    .poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.anchors.length), {
-      timeout: 60_000,
-    })
+    .poll(
+      () => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.anchors.length),
+      {
+        timeout: 60_000,
+      },
+    )
     .toBe(9);
   expect(seen.some(isNaipExport)).toBe(true);
   // T-322: every export must cover the framed place, in EPSG:3857 metres (xmin,ymin,xmax,ymax).
@@ -50,7 +56,15 @@ test('Start from satellite captures NAIP with its credit and year, and KML carri
   const cy = R * Math.log(Math.tan(Math.PI / 4 + (27.1375 * Math.PI) / 360));
   const boxes = seen
     .filter(isNaipExport)
-    .map((u) => new URL(u).searchParams.get('bbox')!.split(',').map(Number) as [number, number, number, number]);
+    .map(
+      (u) =>
+        new URL(u).searchParams.get('bbox')!.split(',').map(Number) as [
+          number,
+          number,
+          number,
+          number,
+        ],
+    );
   const union = boxes.reduce((a, b) => [
     Math.min(a[0], b[0]),
     Math.min(a[1], b[1]),

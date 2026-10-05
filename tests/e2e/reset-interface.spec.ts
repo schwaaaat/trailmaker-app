@@ -1,5 +1,5 @@
 import { expect, test } from './network-fixture';
-import { openFixture } from './golden-helpers';
+import { openFixture, pinSideBySide } from './golden-helpers';
 import { installOfflineBasemap, offlineStylePath } from './offline-basemap';
 import { IMAGERY_HOSTS, stubImagery } from './imagery-stubs';
 
@@ -8,6 +8,8 @@ test.use({ stubbedHosts: IMAGERY_HOSTS });
 
 test('Reset interface restores defaults and leaves the project alone [T-224]', async ({ page }) => {
   test.setTimeout(90_000);
+  // Before the reset the layout is side by side, so the split is visible (T-325 made Tabs the default).
+  await pinSideBySide(page);
   await installOfflineBasemap(page);
   await stubImagery(page, []);
   await openFixture(page, 'tests/fixtures/generated/solid.png');
@@ -32,7 +34,13 @@ test('Reset interface restores defaults and leaves the project alone [T-224]', a
   await page.evaluate(
     async ({ styleUrl }) => {
       const settings = await import('/src/io/settings.ts' as string);
-      settings.updateBasemapSettings({ enabled: true, imagery: 'satellite', styleUrl, lastCenter: [-78.395, 38.597], lastZoom: 14 });
+      settings.updateBasemapSettings({
+        enabled: true,
+        imagery: 'satellite',
+        styleUrl,
+        lastCenter: [-78.395, 38.597],
+        lastZoom: 14,
+      });
     },
     { styleUrl: offlineStylePath },
   );
@@ -40,7 +48,10 @@ test('Reset interface restores defaults and leaves the project alone [T-224]', a
   await expect(page.locator('.stage.split')).toHaveCount(1);
 
   // Reset from the help dialog, with its confirm step.
-  await page.getByRole('toolbar', { name: 'Map tools' }).getByRole('button', { name: 'Keyboard shortcuts' }).click();
+  await page
+    .getByRole('toolbar', { name: 'Map tools' })
+    .getByRole('button', { name: 'Keyboard shortcuts' })
+    .click();
   await page.getByRole('button', { name: 'Reset interface…' }).click();
   const confirm = page.getByRole('alertdialog', { name: 'Reset interface to defaults?' });
   await expect(confirm).toContainText('not touched');

@@ -9,19 +9,32 @@ export const NARROW_QUERY = '(max-width: 899px)';
 const STORAGE_KEY = SPLIT_LAYOUT_STORAGE_KEY;
 
 export type PaneMode = 'pair' | 'overlay';
+export type StageMode = 'side-by-side' | 'tabs';
 
 export interface SplitLayoutState {
   readonly show: boolean;
   readonly mode: PaneMode;
   /** The editor pane's share of the split, 0..1 (side-by-side) or top pane's share (stacked). */
   readonly frac: number;
+  /** Desktop arrangement for the editor and live basemap. */
+  readonly stageMode: StageMode;
+  readonly stepsCollapsed: boolean;
 }
+
+type PersistedSplitLayout = Omit<SplitLayoutState, 'stageMode' | 'stepsCollapsed'> &
+  Partial<Pick<SplitLayoutState, 'stageMode' | 'stepsCollapsed'>>;
 
 export const MIN_FRAC = 0.2;
 export const MAX_FRAC = 0.8;
 export const DEFAULT_FRAC = 0.55;
 
-const DEFAULTS: SplitLayoutState = { show: false, mode: 'pair', frac: DEFAULT_FRAC };
+const DEFAULTS: SplitLayoutState = {
+  show: false,
+  mode: 'pair',
+  frac: DEFAULT_FRAC,
+  stageMode: 'tabs',
+  stepsCollapsed: false,
+};
 
 const subscribers = new Set<(state: SplitLayoutState) => void>();
 
@@ -69,13 +82,20 @@ export function loadSplitLayout(): SplitLayoutState {
       show: typeof parsed.show === 'boolean' ? parsed.show : DEFAULTS.show,
       mode: parsed.mode === 'overlay' ? 'overlay' : 'pair',
       frac: typeof parsed.frac === 'number' ? clampFrac(parsed.frac) : DEFAULTS.frac,
+      // A missing localStorage value is a new profile and defaults to Tabs. A present value
+      // without stageMode is the pre-T-325 shape, whose saved side-by-side layout is preserved.
+      stageMode:
+        parsed.stageMode === 'tabs' || parsed.stageMode === 'side-by-side'
+          ? parsed.stageMode
+          : 'side-by-side',
+      stepsCollapsed: parsed.stepsCollapsed === true,
     };
   } catch {
     return { ...DEFAULTS };
   }
 }
 
-export function saveSplitLayout(state: SplitLayoutState): void {
+export function saveSplitLayout(state: PersistedSplitLayout): void {
   const storage = getLocalStorage();
   if (!storage) return;
   try {
@@ -84,7 +104,6 @@ export function saveSplitLayout(state: SplitLayoutState): void {
     // Ignore quota or security errors, matching src/io/settings.ts.
   }
 }
-
 
 function matchesNow(query: string): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;

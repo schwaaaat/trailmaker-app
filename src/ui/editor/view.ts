@@ -40,6 +40,18 @@ export function centerOn(v: View, cw: number, ch: number, [x, y]: Px): View {
   return { s: v.s, x: cw / 2 - x * v.s, y: ch / 2 - y * v.s };
 }
 
+/** Preserve the image point at the old canvas centre when a pane changes dimensions. */
+export function preserveCenterOnResize(
+  v: View,
+  oldWidth: number,
+  oldHeight: number,
+  newWidth: number,
+  newHeight: number,
+): View {
+  if (oldWidth <= 0 || oldHeight <= 0 || newWidth <= 0 || newHeight <= 0) return v;
+  return centerOn(v, newWidth, newHeight, toImg(v, [oldWidth / 2, oldHeight / 2]));
+}
+
 export const panBy = (v: View, dx: number, dy: number): View => ({
   s: v.s,
   x: v.x + dx,

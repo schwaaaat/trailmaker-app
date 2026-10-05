@@ -33,7 +33,13 @@ import { ExportPanel } from '../ui/panels/ExportPanel';
 import { FeaturesPanel } from '../ui/panels/FeaturesPanel';
 import { ConnectPanel } from '../ui/panels/ConnectPanel';
 import { TracePanel } from '../ui/panels/TracePanel';
-import { BasemapConsent, BasemapPane, OverlayPreview, type BasemapHandle } from '../ui/georef';
+import {
+  BasemapConsent,
+  BasemapPane,
+  getPairingState,
+  OverlayPreview,
+  type BasemapHandle,
+} from '../ui/georef';
 import { Divider } from './Divider';
 import { HelpDialog } from './HelpDialog';
 import { Busy, LiveRegion, Toast } from './Overlays';
@@ -44,6 +50,7 @@ import {
   subscribeSplitLayout,
   useNarrowViewport,
   type PaneMode,
+  type StageMode,
 } from './splitLayout';
 import './app.css';
 
@@ -156,7 +163,7 @@ function Step({
 }) {
   const id = useId();
   return (
-    <section className={state ? `step ${state}` : 'step'} aria-labelledby={id}>
+    <section className={state ? `step ${state}` : 'step'} aria-labelledby={id} data-step={n}>
       <h2 id={id}>
         <span className="n" aria-hidden="true">
           {n}
@@ -194,13 +201,63 @@ export default function App() {
   const narrow = useNarrowViewport();
   const phoneLayout = useNarrowViewport('(max-width: 820px)');
   const [layout, setLayout] = useState(loadSplitLayout);
-  const showOverlay = phoneLayout ? stageView === 'overlay' : layout.mode === 'overlay';
+  const desktopTabs = !phoneLayout && layout.stageMode === 'tabs';
+  const showStageTabs = layout.show && (phoneLayout || desktopTabs);
+  const showOverlay =
+    phoneLayout || desktopTabs ? stageView === 'overlay' : layout.mode === 'overlay';
   const stageRef = useRef<HTMLElement | null>(null);
   const basemapRef = useRef<BasemapHandle | null>(null);
   const overlayRef = useRef<BasemapHandle | null>(null);
 
   useEffect(() => subscribeSplitLayout(setLayout), []);
   useEffect(() => saveSplitLayout(layout), [layout]);
+
+  // In desktop Tabs mode, switch tabs for pairing only when the user already has the basemap open.
+  useEffect(() => {
+    if (phoneLayout || layout.stageMode !== 'tabs') return;
+    let previous = getPairingState(appStore.getState()).status;
+    let switchedToBasemapForPair = false;
+    if (
+      previous === 'pending' &&
+      layout.show &&
+      (appStore.getState().stageView ?? 'map') === 'map'
+    ) {
+      switchedToBasemapForPair = true;
+      setStageView('basemap');
+    }
+    return appStore.subscribe((state) => {
+      const current = getPairingState(state).status;
+      const startedPairing = previous !== 'pending' && current === 'pending';
+      const completedPairing = previous === 'pending' && current !== 'pending';
+      previous = current;
+      if (startedPairing && layout.show && (state.stageView ?? 'map') === 'map') {
+        switchedToBasemapForPair = true;
+        setStageView('basemap');
+      }
+      if (completedPairing) {
+        if (switchedToBasemapForPair) setStageView('map');
+        switchedToBasemapForPair = false;
+      }
+    });
+  }, [phoneLayout, layout.stageMode, layout.show]);
+
+  // Backslash has no editor action; '[' already steps focused vertices by ten.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (phoneLayout || event.key !== '\\' || event.altKey || event.ctrlKey || event.metaKey)
+        return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+      )
+        return;
+      event.preventDefault();
+      setLayout((s) => ({ ...s, stepsCollapsed: !s.stepsCollapsed }));
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [phoneLayout]);
 
   // Satellite capture request opens the basemap pane (and basemap tab on phones, T-318).
   useEffect(() => {
@@ -224,17 +281,40 @@ export default function App() {
   }, [layout.mode, fitOk]);
 
   useEffect(() => {
-    if (!phoneLayout || stageView === 'map') return;
+    if ((!phoneLayout && !desktopTabs) || stageView === 'map' || !layout.show) return;
     const frame = requestAnimationFrame(() => {
       basemapRef.current?.getMap()?.resize();
       overlayRef.current?.getMap()?.resize();
     });
     return () => cancelAnimationFrame(frame);
-  }, [phoneLayout, stageView, layout.show]);
+  }, [phoneLayout, desktopTabs, stageView, layout.show]);
 
   const setShow = (show: boolean) => setLayout((s) => ({ ...s, show }));
+  const toggleBasemap = () => {
+    const show = !layout.show;
+    setShow(show);
+    if (desktopTabs) setStageView(show ? 'basemap' : 'map');
+  };
   const setMode = (mode: PaneMode) => setLayout((s) => ({ ...s, mode }));
+  const setStageMode = (stageMode: StageMode) => {
+    setLayout((s) => ({ ...s, stageMode }));
+    if (stageMode === 'tabs' && getPairingState(appStore.getState()).status === 'pending') {
+      setLayout((s) => ({ ...s, show: true, mode: 'pair' }));
+      setStageView('basemap');
+    }
+  };
   const setFrac = (frac: number) => setLayout((s) => ({ ...s, frac }));
+  const setStepsCollapsed = (stepsCollapsed: boolean) =>
+    setLayout((s) => ({ ...s, stepsCollapsed }));
+  const expandAtStep = (n: number) => {
+    setStepsCollapsed(false);
+    requestAnimationFrame(() => {
+      const step = stageRef.current?.parentElement?.querySelector<HTMLElement>(
+        `[data-step="${n}"]`,
+      );
+      step?.scrollIntoView?.({ block: 'start' });
+    });
+  };
   // MapLibre doesn't observe its container; the divider commit has to nudge it (acceptance 4).
   const resizeBasemaps = () => {
     basemapRef.current?.getMap()?.resize();
@@ -242,7 +322,7 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app${!phoneLayout && layout.stepsCollapsed ? ' collapsed' : ''}`}>
       <LiveRegion />
       <HelpDialog />
       <header className="app-header">
@@ -251,129 +331,192 @@ export default function App() {
         <UnitsToggle />
       </header>
       <main
-        className={`stage${layout.show ? ' split' : ''}${narrow ? ' narrow' : ''}`}
+        className={`stage${layout.show && !desktopTabs ? ' split' : ''}${narrow ? ' narrow' : ''}`}
         aria-label="Map"
         ref={stageRef}
       >
-        {phoneLayout && layout.show && (
-          <div className="stage-tabs" role="tablist" aria-label="Map stage view">
+        {layout.show && (
+          <div className="stage-header">
+            {!phoneLayout && (
+              <div className="seg stage-mode" role="group" aria-label="Stage layout">
+                <button
+                  type="button"
+                  aria-pressed={layout.stageMode === 'side-by-side'}
+                  onClick={() => setStageMode('side-by-side')}
+                >
+                  Side by side
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={layout.stageMode === 'tabs'}
+                  onClick={() => setStageMode('tabs')}
+                >
+                  Tabs
+                </button>
+              </div>
+            )}
+            {showStageTabs && (
+              <div className="stage-tabs" role="tablist" aria-label="Map stage view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={stageView === 'map'}
+                  onClick={() => setStageView('map')}
+                >
+                  Map
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={stageView === 'basemap'}
+                  onClick={() => {
+                    setMode('pair');
+                    setStageView('basemap');
+                  }}
+                >
+                  Basemap
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={stageView === 'overlay'}
+                  disabled={!fitOk}
+                  onClick={() => {
+                    setMode('overlay');
+                    setStageView('overlay');
+                  }}
+                >
+                  Overlay
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="stage-content">
+          <div
+            className="stage-editor"
+            role="region"
+            aria-label="Park map"
+            hidden={showStageTabs && stageView !== 'map'}
+            style={layout.show ? { flexBasis: `${layout.frac * 100}%` } : undefined}
+          >
+            <MapDropZone>
+              <EditorStage />
+              <EmptyState />
+            </MapDropZone>
+            <Toolbar />
+            <TipLine />
+            <Toast />
+            <Busy />
+          </div>
+          {layout.show && (
+            <>
+              {!phoneLayout && !desktopTabs && (
+                <Divider
+                  frac={layout.frac}
+                  orientation={narrow ? 'horizontal' : 'vertical'}
+                  onChange={setFrac}
+                  onCommit={(frac) => {
+                    setFrac(frac);
+                    resizeBasemaps();
+                  }}
+                  containerRef={stageRef}
+                />
+              )}
+              <div className="stage-georef" hidden={showStageTabs && stageView === 'map'}>
+                {!phoneLayout && !desktopTabs && (
+                  <div className="seg" role="group" aria-label="Basemap view">
+                    <button
+                      type="button"
+                      aria-pressed={layout.mode === 'pair'}
+                      onClick={() => setMode('pair')}
+                    >
+                      Pair anchors
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={layout.mode === 'overlay'}
+                      disabled={!fitOk}
+                      title={fitOk ? undefined : 'Pin at least 2 anchors first'}
+                      onClick={() => setMode('overlay')}
+                    >
+                      Overlay preview
+                    </button>
+                  </div>
+                )}
+                {showOverlay ? (
+                  <OverlayPreview handleRef={overlayRef} />
+                ) : (
+                  <BasemapPane handleRef={basemapRef} onResetInterface={resetInterface} />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </main>
+      <aside
+        className={`side${!phoneLayout && layout.stepsCollapsed ? ' collapsed' : ''}`}
+        aria-label="Steps"
+      >
+        {!phoneLayout && !layout.stepsCollapsed && (
+          <div className="side-header">
+            <h2>Steps</h2>
             <button
               type="button"
-              role="tab"
-              aria-selected={stageView === 'map'}
-              onClick={() => setStageView('map')}
+              className="side-collapse"
+              aria-label="Collapse steps panel"
+              aria-expanded="true"
+              aria-keyshortcuts={'\\'}
+              title="Collapse steps (backslash)"
+              onClick={() => setStepsCollapsed(true)}
             >
-              Map
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={stageView === 'basemap'}
-              onClick={() => {
-                setMode('pair');
-                setStageView('basemap');
-              }}
-            >
-              Basemap
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={stageView === 'overlay'}
-              disabled={!fitOk}
-              onClick={() => {
-                setMode('overlay');
-                setStageView('overlay');
-              }}
-            >
-              Overlay
+              Collapse
             </button>
           </div>
         )}
-        <div
-          className="stage-editor"
-          role="region"
-          aria-label="Park map"
-          hidden={phoneLayout && layout.show && stageView !== 'map'}
-          style={layout.show ? { flexBasis: `${layout.frac * 100}%` } : undefined}
-        >
-          <MapDropZone>
-            <EditorStage />
-            <EmptyState />
-          </MapDropZone>
-          <Toolbar />
-          <TipLine />
-          <Toast />
-          <Busy />
-        </div>
-        {layout.show && (
+        {!phoneLayout && layout.stepsCollapsed && (
+          <nav className="steps-rail" aria-label="Steps">
+            {(['Open map', 'Pin to real world', 'Trace', 'Export'] as const).map((title, i) => (
+              <button
+                key={title}
+                type="button"
+                className="step-rail-button"
+                aria-label={`Expand steps at ${title}`}
+                title={title}
+                onClick={() => expandAtStep(i + 1)}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </nav>
+        )}
+        {!(!phoneLayout && layout.stepsCollapsed) && (
           <>
-            {!phoneLayout && (
-              <Divider
-                frac={layout.frac}
-                orientation={narrow ? 'horizontal' : 'vertical'}
-                onChange={setFrac}
-                onCommit={(frac) => {
-                  setFrac(frac);
-                  resizeBasemaps();
-                }}
-                containerRef={stageRef}
-              />
-            )}
-            <div className="stage-georef" hidden={phoneLayout && stageView === 'map'}>
-              {!phoneLayout && (
-                <div className="seg" role="group" aria-label="Basemap view">
-                  <button
-                    type="button"
-                    aria-pressed={layout.mode === 'pair'}
-                    onClick={() => setMode('pair')}
-                  >
-                    Pair anchors
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={layout.mode === 'overlay'}
-                    disabled={!fitOk}
-                    title={fitOk ? undefined : 'Pin at least 2 anchors first'}
-                    onClick={() => setMode('overlay')}
-                  >
-                    Overlay preview
-                  </button>
-                </div>
-              )}
-              {showOverlay ? (
-                <OverlayPreview handleRef={overlayRef} />
-              ) : (
-                <BasemapPane handleRef={basemapRef} onResetInterface={resetInterface} />
-              )}
-            </div>
+            <Step n={1} title="Open map" state={s1}>
+              <p className="hint">
+                A photo, scan, screenshot or PDF of the trail map. Straight-on scans trace best.
+              </p>
+              <div className="row">
+                <OpenMapButton className="btn primary" />
+                <StartSatelliteButton className="btn small" />
+                <OpenProjectButton className="btn small" />
+              </div>
+              <PdfPagePicker />
+            </Step>
+            <Step n={2} title="Pin to real world" state={s2}>
+              <AnchorsPanel />
+              <GeorefToggle show={layout.show} onToggle={toggleBasemap} />
+            </Step>
+            <Step n={3} title="Trace" state={s3}>
+              <TracePanel />
+              <FeaturesPanel />
+              <ConnectPanel />
+            </Step>
+            <Step n={4} title="Export" state={s4}>
+              <ExportPanel />
+            </Step>
           </>
         )}
-      </main>
-      <aside className="side" aria-label="Steps">
-        <Step n={1} title="Open map" state={s1}>
-          <p className="hint">
-            A photo, scan, screenshot or PDF of the trail map. Straight-on scans trace best.
-          </p>
-          <div className="row">
-            <OpenMapButton className="btn primary" />
-            <StartSatelliteButton className="btn small" />
-            <OpenProjectButton className="btn small" />
-          </div>
-          <PdfPagePicker />
-        </Step>
-        <Step n={2} title="Pin to real world" state={s2}>
-          <AnchorsPanel />
-          <GeorefToggle show={layout.show} onToggle={() => setShow(!layout.show)} />
-        </Step>
-        <Step n={3} title="Trace" state={s3}>
-          <TracePanel />
-          <FeaturesPanel />
-          <ConnectPanel />
-        </Step>
-        <Step n={4} title="Export" state={s4}>
-          <ExportPanel />
-        </Step>
       </aside>
     </div>
   );

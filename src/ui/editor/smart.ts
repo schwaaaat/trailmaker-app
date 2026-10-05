@@ -44,6 +44,10 @@ export class SmartFollow implements HopProvider {
 
   async start(at: Px, view: View): Promise<{ at: Px; ink: Rgb | null }> {
     const s = state();
+    if (s.editorBackdrop === 'esri') {
+      showToast('Smart follow works on the map image; switch the backdrop to Map.');
+      return { at, ink: null };
+    }
     const map = s.session?.map;
     const p = s.session?.project;
     if (!map || !p?.trace.smartFollow) return { at, ink: null };
@@ -61,6 +65,7 @@ export class SmartFollow implements HopProvider {
 
   async hop(from: Px, to: Px, draft: Draft, view: View): Promise<readonly Px[] | null> {
     const s = state();
+    if (s.editorBackdrop === 'esri') return [to];
     const map = s.session?.map;
     const p = s.session?.project;
     if (!map || !p?.trace.smartFollow || !draft.ink) return [to];
@@ -112,6 +117,10 @@ export class SmartFollow implements HopProvider {
 /** The ink picker tool: pick a trail color for smart follow or for a new auto-trace chip. */
 async function pickInkAt(e: EditorEvents['click'], view: View): Promise<void> {
   const s = state();
+  if (s.editorBackdrop === 'esri') {
+    showToast('Color pick works on the map image; switch the backdrop to Map.');
+    return;
+  }
   const map = s.session?.map;
   if (!map || !e.inside) return;
   const id = await imageFor(map);

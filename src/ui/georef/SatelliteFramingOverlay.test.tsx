@@ -68,13 +68,7 @@ describe('SatelliteFramingOverlay', () => {
 
   it('renders nothing when closed', () => {
     act(() => {
-      root.render(
-        <SatelliteFramingOverlay
-          map={typedMap}
-          isOpen={false}
-          onClose={vi.fn()}
-        />
-      );
+      root.render(<SatelliteFramingOverlay map={typedMap} isOpen={false} onClose={vi.fn()} />);
     });
 
     expect(container.querySelector('.trailmaker-satellite-framing-overlay')).toBeNull();
@@ -82,13 +76,7 @@ describe('SatelliteFramingOverlay', () => {
 
   it('renders framing reticle, dimensions, ground resolution, and zoom controls when open', () => {
     act(() => {
-      root.render(
-        <SatelliteFramingOverlay
-          map={typedMap}
-          isOpen={true}
-          onClose={vi.fn()}
-        />
-      );
+      root.render(<SatelliteFramingOverlay map={typedMap} isOpen={true} onClose={vi.fn()} />);
     });
 
     expect(container.querySelector('.trailmaker-satellite-framing-overlay')).not.toBeNull();
@@ -117,15 +105,17 @@ describe('SatelliteFramingOverlay', () => {
           onClose={vi.fn()}
           activeProvider="esri"
           onSwitchProvider={handleSwitch}
-        />
+        />,
       );
     });
 
     const esriNotice = container.querySelector('.trailmaker-framing-esri-notice');
     expect(esriNotice).not.toBeNull();
-    expect(esriNotice?.textContent).toContain('capture uses public-domain NAIP where available and USGS imagery elsewhere');
-    expect(esriNotice?.textContent).toContain('Esri does not permit offline tile export');
-    expect(esriNotice?.textContent).toContain('tracing with Esri is allowed');
+    expect(esriNotice?.textContent).toContain(
+      'captured map uses public-domain NAIP (USGS elsewhere)',
+    );
+    expect(esriNotice?.textContent).toContain("Esri doesn't permit offline export");
+    expect(esriNotice?.textContent).toContain('switch the editor backdrop to Esri (live)');
 
     const switchBtn = esriNotice?.querySelector('button');
     expect(switchBtn).not.toBeNull();
@@ -137,17 +127,15 @@ describe('SatelliteFramingOverlay', () => {
 
   it('allows stepping zoom up and down', () => {
     act(() => {
-      root.render(
-        <SatelliteFramingOverlay
-          map={typedMap}
-          isOpen={true}
-          onClose={vi.fn()}
-        />
-      );
+      root.render(<SatelliteFramingOverlay map={typedMap} isOpen={true} onClose={vi.fn()} />);
     });
 
-    const decBtn = container.querySelector('button[aria-label="Decrease capture zoom"]') as HTMLButtonElement;
-    const incBtn = container.querySelector('button[aria-label="Increase capture zoom"]') as HTMLButtonElement;
+    const decBtn = container.querySelector(
+      'button[aria-label="Decrease capture zoom"]',
+    ) as HTMLButtonElement;
+    const incBtn = container.querySelector(
+      'button[aria-label="Increase capture zoom"]',
+    ) as HTMLButtonElement;
     const valueEl = container.querySelector('.trailmaker-framing-zoom-value');
 
     const initialZoom = Number(valueEl?.textContent);
@@ -177,11 +165,19 @@ describe('SatelliteFramingOverlay', () => {
           onClose={handleClose}
           showToast={showToast}
           tileLoader={mockTileLoader}
-        />
+        />,
       );
     });
 
-    const captureBtn = container.querySelector('.trailmaker-framing-actions .btn.primary') as HTMLButtonElement;
+    const sourceSelect = container.querySelector('#capture-imagery-source') as HTMLSelectElement;
+    act(() => {
+      sourceSelect.value = 'naip';
+      sourceSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const captureBtn = container.querySelector(
+      '.trailmaker-framing-actions .btn.primary',
+    ) as HTMLButtonElement;
     expect(captureBtn).not.toBeNull();
 
     await act(async () => {

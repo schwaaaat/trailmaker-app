@@ -1,7 +1,15 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Anchor, Feature, FitResult, GeoFit, KmzRequest, Project, Trail } from '../../core/types';
+import type {
+  Anchor,
+  Feature,
+  FitResult,
+  GeoFit,
+  KmzRequest,
+  Project,
+  Trail,
+} from '../../core/types';
 import * as formatModule from '../../core/export/format';
 import { sessionBridge } from '../../state/bridge';
 import { makeProject, makeSession } from '../../state/fixtures.test.helper';
@@ -10,6 +18,7 @@ import {
   appStore,
   edit,
   openSession,
+  redo,
   requestFocus,
   selectFeature,
   selectFit,
@@ -17,6 +26,7 @@ import {
   setCandidateOn,
   setCandidates,
   setDraft,
+  setRefinePreview,
   setTool,
   setConnectSession,
   undo,
@@ -32,6 +42,7 @@ import { FeaturesPanel, LIST_BATCH, LIST_FIRST } from './FeaturesPanel';
 import { fitMessage, fmtRes } from './fit-message';
 import { TracePanel } from './TracePanel';
 import { ConnectPanel } from './ConnectPanel';
+import { Toolbar } from '../editor/Toolbar';
 
 const downloads = vi.hoisted(() => [] as { name: string; type: string }[]);
 vi.mock('../../io/download', () => ({
@@ -606,6 +617,165 @@ describe('FeaturesPanel', () => {
     expect(reverted.pts).toHaveLength(7);
   });
 
+  it('refines a selected trail with pinned junctions as one undoable edit (T-327)', async () => {
+    const branch: Trail = {
+      ...trail,
+      id: 'branch',
+      name: 'Branch',
+      pts: [
+        [900, 100],
+        [950, 150],
+      ],
+    };
+    const fake = fakeWorker({
+      refineTrail: async () => ({
+        pts: [
+          [100, 98],
+          [900, 100],
+        ],
+        segments: [{ from: 0, to: 1, refined: true, confidence: 0.96 }],
+        ink: [205, 48, 48],
+        ms: 4,
+      }),
+    });
+    setWorkerForTests(fake.api);
+    try {
+      open(makeProject({ features: [trail, branch] }));
+      render(
+        <>
+          <FeaturesPanel />
+          <Toolbar />
+        </>,
+      );
+      act(() => selectFeature('f1'));
+      click(byText('Refine to map image'));
+      await act(async () => jobsIdle());
+
+      const [request] = fake.of('refineTrail')[0]!.args as [
+        { pinned: readonly number[]; corridorPx: number },
+      ];
+      expect(request.pinned).toStrictEqual([1]);
+      expect(request.corridorPx).toBe(12);
+      const sourceTrail = proj().features[0]!;
+      expect(sourceTrail.kind === 'trail' ? sourceTrail.pts : null).toStrictEqual(trail.pts);
+      expect(host.querySelector('[aria-label="Refinement preview"]')).not.toBeNull();
+      click(byText('Apply refinement'));
+      expect((proj().features[0] as Trail).pts).toStrictEqual([
+        [100, 98],
+        [900, 100],
+      ]);
+      act(() => undo());
+      expect((proj().features[0] as Trail).pts).toStrictEqual(trail.pts);
+      act(() => redo());
+      expect((proj().features[0] as Trail).pts).toStrictEqual([
+        [100, 98],
+        [900, 100],
+      ]);
+    } finally {
+      setWorkerForTests(null);
+    }
+  });
+
+  it('rejects a refinement preview without changing the project and exposes Esri isolation copy (T-327)', async () => {
+    const fake = fakeWorker();
+    setWorkerForTests(fake.api);
+    try {
+      open(makeProject({ features: [trail] }));
+      appStore.setState({ editorBackdrop: 'esri' });
+      render(
+        <>
+          <FeaturesPanel />
+          <Toolbar />
+        </>,
+      );
+      act(() => selectFeature('f1'));
+      const before = JSON.stringify(proj());
+      click(byText('Refine to map image'));
+      await act(async () => jobsIdle());
+      expect(host.querySelector('[role="note"]')?.textContent).toBe(
+        'Refining against the map image, not Esri.',
+      );
+      click(byText('Reject'));
+      expect(JSON.stringify(proj())).toBe(before);
+      expect(st().refinePreview).toBeNull();
+    } finally {
+      setWorkerForTests(null);
+    }
+  });
+
+  it('starts refinement from the trail context menu and Alt+Shift+R shortcut (T-327)', async () => {
+    const fake = fakeWorker();
+    setWorkerForTests(fake.api);
+    try {
+      open(makeProject({ features: [trail] }));
+      act(() => selectFeature('f1'));
+      render(
+        <>
+          <FeaturesPanel />
+          <Toolbar />
+        </>,
+      );
+      act(() => q('.feats li').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+      click(host.querySelector('[role="menuitem"]')!);
+      await act(async () => jobsIdle());
+      expect(fake.of('refineTrail')).toHaveLength(1);
+      act(() => setRefinePreview(null));
+      act(() => {
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'R', altKey: true, shiftKey: true, bubbles: true }),
+        );
+      });
+      await act(async () => jobsIdle());
+      expect(fake.of('refineTrail')).toHaveLength(2);
+    } finally {
+      setWorkerForTests(null);
+    }
+  });
+
+  it('refines all trails sequentially and applies the batch as one history command (T-327)', async () => {
+    const second: Trail = {
+      ...trail,
+      id: 'second',
+      name: 'Second trail',
+      pts: [
+        [200, 200],
+        [500, 200],
+      ],
+    };
+    const fake = fakeWorker({
+      refineTrail: async (request) => ({
+        pts: request.pts.map(([x, y]) => [x, y - 1] as const),
+        segments: [{ from: 0, to: request.pts.length - 1, refined: true, confidence: 0.9 }],
+        ink: [205, 48, 48],
+        ms: 3,
+      }),
+    });
+    setWorkerForTests(fake.api);
+    try {
+      open(makeProject({ features: [trail, second] }));
+      render(<FeaturesPanel />);
+      click(byText('Refine all trails'));
+      await act(async () => jobsIdle());
+      expect(fake.of('refineTrail')).toHaveLength(2);
+      expect(st().refinePreview?.batch).toBe(true);
+      click(byText('Apply refinement'));
+      expect((proj().features[0] as Trail).pts).toStrictEqual([
+        [100, 99],
+        [900, 99],
+      ]);
+      expect((proj().features[1] as Trail).pts).toStrictEqual([
+        [200, 199],
+        [500, 199],
+      ]);
+      act(() => undo());
+      expect(
+        proj().features.map((feature) => (feature.kind === 'trail' ? feature.pts : [])),
+      ).toStrictEqual([trail.pts, second.pts]);
+    } finally {
+      setWorkerForTests(null);
+    }
+  });
+
   it('supports simplify and smooth on areas, keeping closed rings with min 3 points (T-222)', () => {
     const testArea: Feature = {
       kind: 'area',
@@ -631,7 +801,9 @@ describe('FeaturesPanel', () => {
 
     // Apply
     click(byText('Apply'));
-    const simplifiedArea = proj().features.find((f) => f.id === 'a1') as import('../../core/types').Area;
+    const simplifiedArea = proj().features.find(
+      (f) => f.id === 'a1',
+    ) as import('../../core/types').Area;
     expect(simplifiedArea.pts.length).toBeGreaterThanOrEqual(3);
     expect(simplifiedArea.pts).toHaveLength(4);
 

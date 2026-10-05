@@ -5,6 +5,7 @@ import {
   centerOn,
   fitView,
   panBy,
+  preserveCenterOnResize,
   toImg,
   toScr,
   zoomAt,
@@ -74,5 +75,14 @@ describe('view math', () => {
     expect(toScr(v, [100, 200])).toStrictEqual([320, 240]);
     expect(v.s).toBe(V.s);
     expect(panBy(V, 5, -7)).toStrictEqual({ s: 2.5, x: -125, y: 40 });
+  });
+
+  it('preserves the image point at canvas center when the stage width changes', () => {
+    const old = { s: 1.75, x: -420, y: 90 };
+    const imageAtCenter = toImg(old, [800, 450]);
+    const resized = preserveCenterOnResize(old, 1600, 900, 1876, 996);
+    expect(toImg(resized, [938, 498])).toEqual(imageAtCenter);
+    expect(resized.s).toBe(old.s);
+    expect(preserveCenterOnResize(old, 0, 0, 500, 400)).toBe(old);
   });
 });

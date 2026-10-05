@@ -98,12 +98,32 @@ export interface FocusRequest {
 
 /** A long worker job shown inline with progress and Cancel (scan colors, find trails). */
 export interface JobStatus {
-  readonly kind: 'scan' | 'auto';
+  readonly kind: 'scan' | 'auto' | 'refine';
   readonly jobId: string;
   /** 0..1. */
   readonly fraction: number;
   /** Human-readable stage, e.g. "Finding Red lines (1 of 2)". */
   readonly stage: string;
+}
+
+/** Transient worker result shown over the editor until the user applies or rejects refinement. */
+export interface RefinePreviewPart {
+  readonly confidence: number;
+  readonly originalPts: readonly Px[];
+  readonly refinedPts: readonly Px[];
+  readonly useRefined: boolean;
+}
+
+export interface RefinePreviewEntry {
+  readonly featureId: FeatureId;
+  readonly name: string;
+  readonly originalPts: readonly Px[];
+  readonly parts: readonly RefinePreviewPart[];
+}
+
+export interface RefinePreviewState {
+  readonly entries: readonly RefinePreviewEntry[];
+  readonly batch: boolean;
 }
 
 export interface AppState {
@@ -175,6 +195,8 @@ export interface AppState {
   readonly satelliteCaptureRequested?: boolean;
   /** Live preview of a simplified/smoothed trail or area before Apply (T-222). */
   readonly simplifyPreview?: { readonly featureId: FeatureId; readonly pts: readonly Px[] } | null;
+  /** Transient refinement preview; never written into the project until Apply (T-327). */
+  readonly refinePreview?: RefinePreviewState | null;
   /**
    * The app-wide polite live region (T-215): undo/redo and vertex-focus changes, so screen
    * readers hear them without a visible toast. `id` changes on every announcement so repeating
@@ -182,6 +204,9 @@ export interface AppState {
    */
   readonly announcement: { readonly id: number; readonly text: string } | null;
   readonly connectSession?: ConnectSession | null;
+  /** Editor-only Esri reference imagery; never part of Project/history. */
+  readonly editorBackdrop?: 'map' | 'esri';
+  readonly editorMapOpacity?: number;
 }
 
 const history = new History();
@@ -227,8 +252,11 @@ const initialState: AppState = {
   helpOpen: false,
   satelliteCaptureRequested: false,
   simplifyPreview: null,
+  refinePreview: null,
   announcement: null,
   connectSession: null,
+  editorBackdrop: 'map',
+  editorMapOpacity: 0,
 };
 
 /** The one app store. */
@@ -261,6 +289,7 @@ export function openSession(session: Session): void {
     inkFor: null,
     lastInk: null,
     simplifyPreview: null,
+    refinePreview: null,
     history: historyStatus(),
   });
 }
@@ -303,6 +332,7 @@ function commitProject(project: Project, extra: Partial<AppState> = {}): void {
     vertexMenu: null,
     vertexFocus: clampedFocus && clampedFocus.featureId === resolvedFeatureId ? clampedFocus : null,
     simplifyPreview: null,
+    refinePreview: null,
     history: historyStatus(),
   });
 }
@@ -409,6 +439,7 @@ export function selectFeature(id: FeatureId | null): void {
     vertexMenu: null,
     vertexFocus: null,
     simplifyPreview: null,
+    refinePreview: null,
   });
 }
 
@@ -419,6 +450,10 @@ export function setSimplifyPreview(
   appStore.setState({ simplifyPreview: preview });
 }
 
+export function setRefinePreview(preview: RefinePreviewState | null): void {
+  appStore.setState({ refinePreview: preview });
+}
+
 /** Arm the touch join flow or clear it after the next map tap (T-219). */
 export function setJoinArmed(joinArmed: boolean): void {
   appStore.setState({ joinArmed });
@@ -427,6 +462,14 @@ export function setJoinArmed(joinArmed: boolean): void {
 /** Choose a map, basemap or overlay pane in the narrow stage (T-219/T-315). */
 export function setStageView(stageView: NonNullable<AppState['stageView']>): void {
   appStore.setState({ stageView });
+}
+
+/** T-324: transient editor backdrop controls, intentionally outside project/history. */
+export function setEditorBackdrop(editorBackdrop: 'map' | 'esri'): void {
+  appStore.setState({ editorBackdrop });
+}
+export function setEditorMapOpacity(editorMapOpacity: number): void {
+  appStore.setState({ editorMapOpacity: Math.max(0, Math.min(1, editorMapOpacity)) });
 }
 
 /** Request opening satellite capture framing overlay (card T-318). */

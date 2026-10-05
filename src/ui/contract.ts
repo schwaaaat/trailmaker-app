@@ -16,6 +16,11 @@ export interface LoadedMap {
   readonly raster: RasterImage;
   /** Original file bytes, kept for autosave, project files and the KMZ overlay. */
   readonly original: Blob;
+  /**
+   * Present for tiled maps (MapSource 'tiles', D-039). Then `display` and `raster` are an overview of
+   * the whole map at `tiles.overviewScale`, not full resolution.
+   */
+  readonly tiles?: TiledMapHandle | null;
   /** Present when the map came from a PDF: lets the page picker load another page. */
   readonly pdf: {
     /** Number of pages. */
@@ -64,4 +69,35 @@ declare global {
     /** See TestHook. */
     __trailmaker?: TestHook;
   }
+}
+
+/** One resolution level of a tiled map. Level 0 is full resolution; level n is downsampled by 2^n. */
+export interface TileLevel {
+  readonly level: number;
+  /** Level size in pixels. */
+  readonly width: number;
+  readonly height: number;
+  /** Tile grid size at this level. */
+  readonly cols: number;
+  readonly rows: number;
+}
+
+/** Access to a tiled map's stored pixels (D-039). Produced by Lane C, rendered and traced by Lane B. */
+export interface TiledMapHandle {
+  /** Available levels, finest first (levels[0].level === 0). */
+  readonly levels: readonly TileLevel[];
+  /** Tile edge in pixels. */
+  readonly tileSize: number;
+  /** display.width / meta.width (the overview's scale relative to full resolution). */
+  readonly overviewScale: number;
+  /** Decoded tile at a level and grid position, or null when it is missing (e.g. a failed download). */
+  getTileBitmap(level: number, col: number, row: number): Promise<ImageBitmap | null>;
+  /**
+   * RGBA pixels of a rectangle given in full-resolution Px, read from `level` (the result is the
+   * rectangle's size divided by 2^level). Missing tiles read as transparent.
+   */
+  readRegion(
+    rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
+    level: number,
+  ): Promise<RasterImage>;
 }

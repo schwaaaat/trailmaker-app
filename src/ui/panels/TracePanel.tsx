@@ -129,7 +129,7 @@ function ChipRow({ chip }: { chip: ColorChip }) {
 
 function JobBar() {
   const job = useApp((s) => s.job);
-  if (!job) return null;
+  if (!job || job.kind === 'refine') return null;
   return (
     <div className="job" role="status">
       <div className="job-stage">{job.stage}</div>
@@ -325,7 +325,7 @@ function Review() {
   );
 }
 
-function InkRow() {
+function InkRow({ disabled = false }: { disabled?: boolean }) {
   const picked = useApp((s) => s.session?.project.trace.ink ?? null);
   const auto = useApp((s) => s.lastInk);
   const ink = picked ?? auto;
@@ -343,7 +343,13 @@ function InkRow() {
             ? 'Picked from your first click'
             : 'Color is picked from your first click'}
       </span>
-      <button type="button" className="btn small" onClick={() => pickColor('trace')}>
+      <button
+        type="button"
+        className="btn small"
+        disabled={disabled}
+        title={disabled ? 'works on the map image; switch the backdrop to Map' : undefined}
+        onClick={() => pickColor('trace')}
+      >
         Pick color
       </button>
     </div>
@@ -356,6 +362,7 @@ export function TracePanel() {
   const trace = useApp((s) => s.session?.project.trace ?? null);
   const auto = useApp((s) => s.session?.project.autoTrace ?? null);
   const busy = useApp((s) => s.job !== null);
+  const esriBackdrop = useApp((s) => s.editorBackdrop === 'esri');
   if (!open || !trace || !auto) return null;
   const setTrace = (patch: Parameters<typeof setTraceSettings>[1]) => {
     const p = project();
@@ -384,6 +391,7 @@ export function TracePanel() {
         <h3>Find trails automatically</h3>
         <p className="hint">
           Choose the colors this map draws trails in, then let Trailmaker find the lines.
+          {esriBackdrop ? ' Scanning and auto-trace read the map image.' : ''}
         </p>
         <div className="row">
           <button
@@ -394,7 +402,13 @@ export function TracePanel() {
           >
             Scan map colors
           </button>
-          <button type="button" className="btn small" onClick={() => pickColor('chip')}>
+          <button
+            type="button"
+            className="btn small"
+            disabled={esriBackdrop}
+            title={esriBackdrop ? 'works on the map image; switch the backdrop to Map' : undefined}
+            onClick={() => pickColor('chip')}
+          >
             Pick color from map
           </button>
         </div>
@@ -447,6 +461,8 @@ export function TracePanel() {
           <input
             type="checkbox"
             checked={trace.smartFollow}
+            disabled={esriBackdrop}
+            title={esriBackdrop ? 'works on the map image; switch the backdrop to Map' : undefined}
             onChange={(e) => {
               setTrace({ smartFollow: e.target.checked });
               sealHistory();
@@ -454,7 +470,12 @@ export function TracePanel() {
           />{' '}
           Follow the line&apos;s color while tracing
         </label>
-        {trace.smartFollow ? <InkRow /> : null}
+        {trace.smartFollow ? <InkRow disabled={esriBackdrop} /> : null}
+        {esriBackdrop ? (
+          <p className="hint">
+            works on the map image; switch the backdrop to Map to use smart follow or color pick.
+          </p>
+        ) : null}
       </div>
     </div>
   );

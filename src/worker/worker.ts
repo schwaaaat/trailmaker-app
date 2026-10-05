@@ -10,6 +10,8 @@ const transferableApi: WorkerApi = {
   ...api,
   smartTrace: (request, control, onProgress?: JobControl['onProgress']) =>
     api.smartTrace(request, withProgress(control, onProgress)),
+  refineTrail: (request, control, onProgress?: JobControl['onProgress']) =>
+    api.refineTrail(request, withProgress(control, onProgress)),
   scanColors: (imageId, control, onProgress?: JobControl['onProgress']) =>
     api.scanColors(imageId, withProgress(control, onProgress)),
   autoTrace: (request, control, onProgress?: JobControl['onProgress']) =>

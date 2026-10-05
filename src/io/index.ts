@@ -9,4 +9,4 @@ export * from './pwa';
 export * from './gpx';
 export * from './gpxStorage';
 export * from './satellite-capture';
-
+export * from './imagery-sources';

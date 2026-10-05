@@ -50,6 +50,8 @@ describe('help dialog (T-215)', () => {
     expect(dialog).not.toBeNull();
     expect(dialog?.textContent).toContain('Select and move');
     expect(dialog?.textContent).toContain(', / .');
+    expect(dialog?.textContent).toContain('Backslash');
+    expect(dialog?.textContent).toContain('Collapse or expand the steps panel on desktop');
     expect(dialog?.textContent).toContain('Points and splitting');
     expect(document.activeElement?.textContent).toBe('Close');
     opener.remove();
@@ -133,4 +135,3 @@ describe('help dialog (T-215)', () => {
     expect(appStore.getState().helpOpen).toBe(false);
   });
 });
-

@@ -5,14 +5,17 @@ import { openReadyApp } from './app-ready';
 
 export async function openFixture(page: Page, path: string) {
   await openReadyApp(page);
-  const openButton = page.getByRole('complementary', { name: 'Steps' }).getByRole('button', { name: 'Open image or PDF' });
+  const openButton = page
+    .getByRole('complementary', { name: 'Steps' })
+    .getByRole('button', { name: 'Open image or PDF' });
   await expect(openButton).toBeVisible();
-  const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser'),
-    openButton.click(),
-  ]);
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), openButton.click()]);
   await chooser.setFiles(path);
-  await expect.poll(() => page.evaluate(() => window.__trailmaker!.session.getSession()?.project.image.fileName)).toBe('solid');
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__trailmaker!.session.getSession()?.project.image.fileName),
+    )
+    .toBe('solid');
 }
 
 export async function clickFixturePixel(page: Page, truth: FixtureTruth, px: Px) {
@@ -38,5 +41,27 @@ export async function placeFourAnchors(page: Page, truth: FixtureTruth) {
     await input.fill(`${anchor.ll![0]}, ${anchor.ll![1]}`);
     await input.press('Enter');
   }
-  await expect.poll(() => page.evaluate(() => window.__trailmaker!.session.getSession()!.project.anchors.filter((a) => a.ll).length)).toBe(4);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__trailmaker!.session.getSession()!.project.anchors.filter((a) => a.ll).length,
+      ),
+    )
+    .toBe(4);
+}
+
+/**
+ * Start this test with a saved side-by-side layout (T-325 made Tabs the default for fresh
+ * profiles). Seeds the pre-T-325 layout shape once per test, which loads as side by side; later
+ * reloads see whatever the app saved.
+ */
+export async function pinSideBySide(page: Page) {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('e2e-side-by-side-seeded')) return;
+    localStorage.setItem(
+      'trailmaker:splitLayout',
+      JSON.stringify({ show: false, mode: 'pair', frac: 0.55 }),
+    );
+    sessionStorage.setItem('e2e-side-by-side-seeded', '1');
+  });
 }

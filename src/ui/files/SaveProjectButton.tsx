@@ -46,10 +46,14 @@ export function SaveProjectButton({
       setBusy('Saving project...');
       const buffer = await blobToArrayBuffer(current.map.original);
       const bytes = new Uint8Array(buffer);
+      const source = current.map.meta.source;
+      // Tiled maps (D-039) save their overview here until T-329 writes project v3 with tiles.
       const mimeType =
-        current.map.meta.source.kind === 'pdf'
+        source.kind === 'pdf'
           ? 'application/pdf'
-          : current.map.meta.source.mimeType;
+          : source.kind === 'tiles'
+            ? current.map.original.type || 'image/jpeg'
+            : source.mimeType;
 
       const storedImage: StoredImage = { bytes, mimeType };
       const activeGpx = getActiveGpx();
