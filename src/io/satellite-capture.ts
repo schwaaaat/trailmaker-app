@@ -683,10 +683,22 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
         ? computeOptimalNaipZoom(bounds)
         : computeOptimalZoom(bounds));
   const dims = getCaptureDimensions(bounds, zoom);
+  // The output/anchor grid is Web Mercator world pixels. Export services can use a
+  // different pixel spacing (including native-resolution clamping), so their image
+  // pixel offsets are not output-canvas offsets.
+  const projectedPixelSize = EQUATOR_METERS / (TILE_SIZE * Math.pow(2, zoom));
+  const captureWest = dims.xMin * projectedPixelSize - WEB_MERCATOR_HALF_WORLD_M;
+  const captureNorth = WEB_MERCATOR_HALF_WORLD_M - dims.yMin * projectedPixelSize;
+  const captureExtent = {
+    west: captureWest,
+    east: captureWest + dims.width * projectedPixelSize,
+    north: captureNorth,
+    south: captureNorth - dims.height * projectedPixelSize,
+  };
   const naipRequests = useNaip ? planNaipRequests(dims) : [];
   const servicePlan = useArcGis
     ? planServiceRequests(
-        mercatorBounds(bounds),
+        captureExtent,
         groundResolution(centerLat, zoom),
         imagerySource.maxSize,
         imagerySource.nominalResolutionM,
@@ -788,10 +800,20 @@ export async function captureSatelliteView(options: CaptureOptions): Promise<Cap
       ? (useArcGis ? servicePlan : naipRequests).map((request) => ({
           tx: request.x,
           ty: request.y,
-          destX: request.x,
-          destY: request.y,
-          width: request.width,
-          height: request.height,
+          destX: useArcGis
+            ? ((request as ServiceRequest).bbox.west - captureWest) / projectedPixelSize
+            : request.x,
+          destY: useArcGis
+            ? (captureNorth - (request as ServiceRequest).bbox.north) / projectedPixelSize
+            : request.y,
+          width: useArcGis
+            ? ((request as ServiceRequest).bbox.east - (request as ServiceRequest).bbox.west) /
+              projectedPixelSize
+            : request.width,
+          height: useArcGis
+            ? ((request as ServiceRequest).bbox.north - (request as ServiceRequest).bbox.south) /
+              projectedPixelSize
+            : request.height,
           ...(useArcGis
             ? { serviceRequest: request as ServiceRequest }
             : { bbox: (request as NaipRequest).bbox }),

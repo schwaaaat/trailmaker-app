@@ -302,6 +302,72 @@ describe('Tile stitching & missing tile handling', () => {
     satelliteCaptureTestSeam.createCanvas = null;
   });
 
+  it.each(
+    [0, 27.1375, 60].flatMap((latitude) => [0.0762, 1].map((native) => ({ latitude, native }))),
+  )(
+    'places dynamic export geography on the anchor grid at $latitude degrees, native $native m',
+    async ({ latitude, native }) => {
+      const drawImage = vi.fn();
+      const ctx = {
+        fillStyle: '',
+        clearRect: vi.fn(),
+        fillRect: vi.fn(),
+        drawImage,
+      };
+      satelliteCaptureTestSeam.createCanvas = () => ({
+        getContext: () => ctx as unknown as CanvasRenderingContext2D,
+        convertToBlob: async () => new Blob(['synthetic-image'], { type: 'image/png' }),
+      });
+      const bounds: FramedBounds = {
+        north: latitude + 0.0002,
+        south: latitude - 0.0002,
+        west: -80.1707,
+        east: -80.1703,
+      };
+      const requests = new Map<
+        CanvasImageSource,
+        { west: number; east: number; south: number; north: number }
+      >();
+      const result = await captureSatelliteView({
+        bounds,
+        zoom: 18,
+        imagerySource: { ...IMAGERY_SOURCES[0]!, nominalResolutionM: native, maxSize: [64, 64] },
+        serviceRequestLoader: async (_source, request) => {
+          // The server image is geographically labelled by its request footprint, without real imagery pixels.
+          const image = {} as CanvasImageSource;
+          requests.set(image, request.bbox);
+          return image;
+        },
+      });
+      const fit = fitAnchors(result.anchors, result.width, result.height, 'auto');
+      expect(fit.ok).toBe(true);
+      if (!fit.ok) throw new Error('Synthetic capture fit failed');
+      let checked = 0;
+      for (const [image, x, y, width, height] of drawImage.mock.calls as [
+        CanvasImageSource,
+        number,
+        number,
+        number,
+        number,
+      ][]) {
+        const pixel: [number, number] = [x + width / 2, y + height / 2];
+        if (pixel[0] > result.width || pixel[1] > result.height) continue;
+        const bbox = requests.get(image)!;
+        const east = (bbox.west + bbox.east) / 2;
+        const north = (bbox.south + bbox.north) / 2;
+        const radius = 6_378_137;
+        const serverLocation: [number, number] = [
+          (Math.atan(Math.sinh(north / radius)) * 180) / Math.PI,
+          ((east / radius) * 180) / Math.PI,
+        ];
+        expect(haversine(forward(fit, pixel), serverLocation)).toBeLessThan(0.5);
+        checked++;
+      }
+      expect(checked).toBeGreaterThan(0);
+      if (latitude === 60 && native < 1) expect(drawImage.mock.calls.length).toBeGreaterThan(1);
+    },
+  );
+
   it('falls back to NAIP when a curated imagery request fails', async () => {
     const result = await captureSatelliteView({
       bounds: { north: 27.135, south: 27.134, west: -80.145, east: -80.144 },
