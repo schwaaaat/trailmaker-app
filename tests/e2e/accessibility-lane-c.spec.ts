@@ -50,7 +50,7 @@ test('basemap consent and settings have no serious axe violations [T-311]', asyn
     settings.updateBasemapSettings({ enabled: false, styleUrl });
     const host = document.createElement('div');
     host.id = 'test-accessibility-basemap-host';
-    host.style.cssText = 'position:fixed;inset:0;z-index:9999;background:white';
+    host.style.cssText = 'position:fixed;inset:0;z-index:30;background:white';
     document.body.append(host);
     const { mountBasemapPane } = await import('/src/ui/georef/testMount.ts' as string);
     mountBasemapPane(host, { overrideStyleUrl: styleUrl });
@@ -64,8 +64,8 @@ test('basemap consent and settings have no serious axe violations [T-311]', asyn
   await expect(host.getByRole('region', { name: 'Basemap', exact: true })).toBeVisible();
   await expectNoSeriousViolations(page, '#test-accessibility-basemap-host');
   await host.getByRole('button', { name: 'Basemap settings' }).click();
-  await expect(host.getByRole('dialog', { name: 'Basemap settings' })).toBeVisible();
-  await expectNoSeriousViolations(page, '#test-accessibility-basemap-host');
+  await expect(page.getByRole('dialog', { name: 'Basemap settings' })).toBeVisible();
+  await expectNoSeriousViolations(page, '.trailmaker-basemap-settings-popover');
 });
 
 test('pending basemap pairing prompt has no serious axe violations [T-311]', async ({ page }) => {

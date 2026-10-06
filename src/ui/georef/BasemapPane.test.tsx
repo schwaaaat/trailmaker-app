@@ -4,11 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newProject } from '../../core/project';
 import type { Anchor } from '../../core/types';
 import type { LoadedMap } from '../contract';
-import {
-  resetSettings,
-  updateBasemapSettings,
-  updateGeocoderSettings,
-} from '../../io/settings';
+import { resetSettings, updateBasemapSettings, updateGeocoderSettings } from '../../io/settings';
 import { clearActiveGpx, setActiveGpx } from '../../io/gpxStorage';
 import {
   appStore,
@@ -270,7 +266,7 @@ describe('BasemapPane', () => {
     ) as HTMLButtonElement | null;
     act(() => settingsButton?.click());
 
-    const dialog = container.querySelector('[role="dialog"][aria-label="Basemap settings"]');
+    const dialog = document.body.querySelector('[role="dialog"][aria-label="Basemap settings"]');
     expect(dialog?.textContent).toContain(
       'Sends your search text to nominatim.openstreetmap.org. No map image, coordinates, or project data is sent.',
     );
@@ -653,9 +649,7 @@ describe('BasemapPane', () => {
     expect(promptBanner?.getAttribute('aria-live')).toBe('polite');
 
     // Basemap settings button has accessible attributes
-    const settingsBtn = container.querySelector(
-      '.trailmaker-basemap-settings-btn',
-    ) as HTMLElement;
+    const settingsBtn = container.querySelector('.trailmaker-basemap-settings-btn') as HTMLElement;
     expect(settingsBtn.getAttribute('aria-haspopup')).toBe('dialog');
     expect(settingsBtn.getAttribute('aria-expanded')).toBe('false');
 
@@ -722,9 +716,7 @@ describe('BasemapPane', () => {
     act(() => {
       setActiveGpx({
         fileName: 'track.gpx',
-        points: [
-          { id: 'wpt-1', name: 'Trailhead', ll: [38.55, -78.35], kind: 'wpt' },
-        ],
+        points: [{ id: 'wpt-1', name: 'Trailhead', ll: [38.55, -78.35], kind: 'wpt' }],
         tracks: [],
         totalPointsInFile: 1,
         wasDecimated: false,
@@ -803,7 +795,9 @@ describe('BasemapPane', () => {
       await Promise.resolve();
     });
 
-    const captureBtn = container.querySelector('.trailmaker-basemap-capture-btn') as HTMLButtonElement;
+    const captureBtn = container.querySelector(
+      '.trailmaker-basemap-capture-btn',
+    ) as HTMLButtonElement;
     expect(captureBtn).not.toBeNull();
     expect(captureBtn.textContent).toBe('Use this view as my map');
 

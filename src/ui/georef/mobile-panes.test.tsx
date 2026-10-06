@@ -88,9 +88,9 @@ describe('mobile panes and controls (T-315 acceptance 1 & 2)', () => {
         </div>,
       );
 
-      const popover = container.querySelector('.trailmaker-basemap-settings-popover');
+      const popover = document.body.querySelector('.trailmaker-basemap-settings-popover');
       expect(popover).not.toBeNull();
-      expect(container.querySelector('.trailmaker-basemap-close-btn')).not.toBeNull();
+      expect(document.body.querySelector('.trailmaker-basemap-close-btn')).not.toBeNull();
     }
   });
 
@@ -171,11 +171,19 @@ describe('mobile panes and controls (T-315 acceptance 1 & 2)', () => {
         <div style={{ width: `${width}px`, position: 'relative' }}>
           <div className="trailmaker-basemap-top-actions">
             <div className="trailmaker-imagery-switch">
-              <button type="button" className="trailmaker-imagery-btn active">Map</button>
-              <button type="button" className="trailmaker-imagery-btn">Satellite</button>
+              <button type="button" className="trailmaker-imagery-btn active">
+                Map
+              </button>
+              <button type="button" className="trailmaker-imagery-btn">
+                Satellite
+              </button>
             </div>
-            <button type="button" className="trailmaker-basemap-gpx-btn">Import GPX</button>
-            <button type="button" className="trailmaker-basemap-settings-btn">⚙</button>
+            <button type="button" className="trailmaker-basemap-gpx-btn">
+              Import GPX
+            </button>
+            <button type="button" className="trailmaker-basemap-settings-btn">
+              ⚙
+            </button>
           </div>
         </div>,
       );

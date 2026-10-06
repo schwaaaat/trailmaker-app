@@ -209,13 +209,24 @@
   background: var(--panel2);
 }
 
+.trailmaker-basemap-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 35%);
+}
+
 .trailmaker-basemap-settings-popover {
-  position: absolute;
-  top: 54px;
-  right: 12px;
-  z-index: 10;
-  width: 320px;
-  max-width: calc(100vw - 24px);
+  width: 420px;
+  max-width: 100%;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   box-sizing: border-box;
   padding: 16px;
   background: var(--panel);
@@ -226,19 +237,28 @@
 
 @media (max-width: 480px) {
   .trailmaker-basemap-settings-popover {
-    top: 56px;
-    right: 8px;
-    width: calc(100% - 16px);
-    max-width: calc(100vw - 16px);
+    width: 100%;
     padding: 14px 12px;
   }
 }
 
 .trailmaker-basemap-settings-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 14px;
+}
+
+.trailmaker-basemap-settings-popover .trailmaker-geocoder-settings-disclosure {
+  margin: 8px 0 14px;
+}
+
+.trailmaker-basemap-settings-popover .trailmaker-basemap-label:not(:first-child) {
+  margin-top: 12px;
 }
 
 .trailmaker-basemap-settings-title {

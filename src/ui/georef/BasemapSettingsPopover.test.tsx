@@ -54,14 +54,17 @@ describe('BasemapSettingsPopover', () => {
         onChangeEsriApiKey={onChangeEsriApiKey}
       />,
     );
-    const option = container.querySelector('option[value="esri"]') as HTMLOptionElement;
+    const option = document.body.querySelector('option[value="esri"]') as HTMLOptionElement;
     expect(option.disabled).toBe(true);
-    expect(container.textContent).toContain('Create a free ArcGIS developer account');
-    expect(container.textContent).toContain("Restrict the key to this site's address");
-    const keyInput = container.querySelector('#esri-api-key-input') as HTMLInputElement;
+    expect(document.body.textContent).toContain('Create a free ArcGIS developer account');
+    expect(document.body.textContent).toContain("Restrict the key to this site's address");
+    const keyInput = document.body.querySelector('#esri-api-key-input') as HTMLInputElement;
     expect(keyInput.type).toBe('password');
     act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(keyInput, 'key-123');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        keyInput,
+        'key-123',
+      );
       keyInput.dispatchEvent(new Event('input', { bubbles: true }));
     });
     expect(onChangeEsriApiKey).toHaveBeenCalledWith('key-123');
@@ -78,7 +81,9 @@ describe('BasemapSettingsPopover', () => {
         esriApiKey="key-123"
       />,
     );
-    expect((container.querySelector('option[value="esri"]') as HTMLOptionElement).disabled).toBe(false);
+    expect(
+      (document.body.querySelector('option[value="esri"]') as HTMLOptionElement).disabled,
+    ).toBe(false);
   });
 
   it('renders popover controls and responds to user interactions when open', () => {
@@ -107,13 +112,15 @@ describe('BasemapSettingsPopover', () => {
       />,
     );
 
-    const dialog = container.querySelector('[role="dialog"]') as HTMLElement | null;
+    const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement | null;
     expect(dialog).not.toBeNull();
     expect(dialog?.textContent).toContain(
       'Sends your search text to nominatim.openstreetmap.org. No map image, coordinates, or project data is sent.',
     );
 
-    const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+    const checkbox = document.body.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement | null;
     expect(checkbox).not.toBeNull();
     expect(checkbox?.checked).toBe(false);
 
@@ -122,7 +129,7 @@ describe('BasemapSettingsPopover', () => {
     });
     expect(onToggleEnabled).toHaveBeenCalledWith(true);
 
-    const input = container.querySelector('input[type="text"]') as HTMLInputElement | null;
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement | null;
     expect(input).not.toBeNull();
     expect(input?.value).toBe('https://tiles.openfreemap.org/styles/liberty');
 
@@ -134,20 +141,20 @@ describe('BasemapSettingsPopover', () => {
       }
     });
 
-    const resetBtn = container.querySelector(
+    const resetBtn = document.body.querySelector(
       'button[aria-label="Reset to default"]',
     ) as HTMLButtonElement | null;
     act(() => resetBtn?.click());
     expect(onResetStyleUrl).toHaveBeenCalledTimes(1);
 
-    const geocoderCheckbox = container.querySelector(
+    const geocoderCheckbox = document.body.querySelector(
       'input[aria-label="Enable place search"]',
     ) as HTMLInputElement | null;
     expect(geocoderCheckbox).not.toBeNull();
     act(() => geocoderCheckbox?.click());
     expect(onToggleGeocoder).toHaveBeenCalledWith(true);
 
-    const geocoderInput = container.querySelector(
+    const geocoderInput = document.body.querySelector(
       '#geocoder-service-url-input',
     ) as HTMLInputElement | null;
     expect(geocoderInput?.value).toBe('https://nominatim.openstreetmap.org/search?format=jsonv2');
@@ -161,13 +168,13 @@ describe('BasemapSettingsPopover', () => {
       }
     });
     expect(onChangeGeocoderUrl).toHaveBeenCalledWith('https://geo.example/search');
-    const resetGeocoder = container.querySelector(
+    const resetGeocoder = document.body.querySelector(
       'button[aria-label="Reset geocoder to default"]',
     ) as HTMLButtonElement | null;
     act(() => resetGeocoder?.click());
     expect(onResetGeocoderUrl).toHaveBeenCalledTimes(1);
 
-    const closeBtn = container.querySelector(
+    const closeBtn = document.body.querySelector(
       'button[aria-label="Close settings"]',
     ) as HTMLButtonElement | null;
     act(() => closeBtn?.click());
@@ -188,7 +195,7 @@ describe('BasemapSettingsPopover', () => {
       />,
     );
 
-    const dialog = container.querySelector('[role="dialog"]') as HTMLElement | null;
+    const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement | null;
     expect(dialog).not.toBeNull();
     expect(dialog?.getAttribute('aria-modal')).toBe('true');
     expect(dialog?.getAttribute('aria-labelledby')).toBe('basemap-settings-title');
@@ -218,8 +225,12 @@ describe('BasemapSettingsPopover', () => {
       />,
     );
 
-    const closeBtn = container.querySelector('button[aria-label="Close settings"]') as HTMLElement;
-    const resetBtn = container.querySelector('button[aria-label="Reset to default"]') as HTMLElement;
+    const closeBtn = document.body.querySelector(
+      'button[aria-label="Close settings"]',
+    ) as HTMLElement;
+    const resetBtn = document.body.querySelector(
+      'button[aria-label="Reset to default"]',
+    ) as HTMLElement;
 
     expect(document.activeElement).toBe(closeBtn);
 
@@ -271,12 +282,14 @@ describe('BasemapSettingsPopover', () => {
       />,
     );
 
-    const select = container.querySelector('#satellite-provider-select') as HTMLSelectElement | null;
+    const select = document.body.querySelector(
+      '#satellite-provider-select',
+    ) as HTMLSelectElement | null;
     expect(select).not.toBeNull();
     expect(select?.value).toBe('usgs');
 
-    expect(container.textContent).toContain('basemap.nationalmap.gov');
-    expect(container.textContent).toContain('No map image or project data is sent.');
+    expect(document.body.textContent).toContain('basemap.nationalmap.gov');
+    expect(document.body.textContent).toContain('No map image or project data is sent.');
 
     act(() => {
       if (select) {
@@ -306,7 +319,7 @@ describe('BasemapSettingsPopover', () => {
     );
 
     // Reset interface button exists
-    const resetInterfaceBtn = container.querySelector(
+    const resetInterfaceBtn = document.body.querySelector(
       'button[aria-label="Reset interface"]',
     ) as HTMLButtonElement | null;
     expect(resetInterfaceBtn).not.toBeNull();
@@ -317,7 +330,7 @@ describe('BasemapSettingsPopover', () => {
       resetInterfaceBtn?.click();
     });
 
-    const confirmBox = container.querySelector(
+    const confirmBox = document.body.querySelector(
       '.trailmaker-reset-interface-confirm',
     ) as HTMLElement | null;
     expect(confirmBox).not.toBeNull();
@@ -331,26 +344,26 @@ describe('BasemapSettingsPopover', () => {
     );
 
     // Cancel returns to settings controls
-    const cancelBtn = container.querySelector(
+    const cancelBtn = document.body.querySelector(
       '.trailmaker-btn-cancel-reset',
     ) as HTMLButtonElement | null;
     expect(cancelBtn).not.toBeNull();
     act(() => {
       cancelBtn?.click();
     });
-    expect(container.querySelector('.trailmaker-reset-interface-confirm')).toBeNull();
-    expect(container.querySelector('input[type="checkbox"]')).not.toBeNull();
+    expect(document.body.querySelector('.trailmaker-reset-interface-confirm')).toBeNull();
+    expect(document.body.querySelector('input[type="checkbox"]')).not.toBeNull();
     expect(onResetInterface).not.toHaveBeenCalled();
 
     // Re-open confirmation and confirm reset
-    const resetInterfaceBtnAgain = container.querySelector(
+    const resetInterfaceBtnAgain = document.body.querySelector(
       'button[aria-label="Reset interface"]',
     ) as HTMLButtonElement | null;
     act(() => {
       resetInterfaceBtnAgain?.click();
     });
 
-    const confirmResetBtn = container.querySelector(
+    const confirmResetBtn = document.body.querySelector(
       '.trailmaker-btn-confirm-reset',
     ) as HTMLButtonElement | null;
     expect(confirmResetBtn).not.toBeNull();
