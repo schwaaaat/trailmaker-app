@@ -117,7 +117,9 @@ async function drawBoundary(page: Page) {
     await canvas.click({ position: { x: box.width / 2 + dx, y: box.height / 2 + dy } });
   }
   await expect(
-    overlay.getByRole('group', { name: 'Park boundary points' }).getByRole('button', { name: /^Point \d/ }),
+    overlay
+      .getByRole('group', { name: 'Park boundary points' })
+      .getByRole('button', { name: /^Point \d/ }),
   ).toHaveCount(4);
   await overlay.getByRole('button', { name: 'Close boundary' }).click();
   await expect(overlay.getByLabel('Tile detail')).toHaveValue('20');
@@ -135,7 +137,15 @@ test('draw, estimate, download, save, and reopen a tiled map offline [T-329]', a
   await stubTiledService(page, seen);
   const overlay = await drawBoundary(page);
   await overlay.getByRole('button', { name: 'Download offline tiles' }).click();
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.image.source.kind ?? null), { timeout: 60_000 }).toBe('tiles');
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window.__trailmaker?.session.getSession()?.project.image.source.kind ?? null,
+        ),
+      { timeout: 60_000 },
+    )
+    .toBe('tiles');
   const before = await page.evaluate(() => {
     const session = window.__trailmaker!.session.getSession()!;
     return { project: session.project, levels: session.map.tiles?.levels.length ?? 0 };
@@ -156,19 +166,35 @@ test('draw, estimate, download, save, and reopen a tiled map offline [T-329]', a
   expect(Object.keys(archive).some((path) => path.startsWith('tiles/'))).toBe(true);
   expect(JSON.parse(new TextDecoder().decode(archive['project.json']!)).version).toBe(4);
 
-  await expect.poll(() => page.evaluate(async () => {
-    const { readAutosave } = await import('/src/io/autosave.ts' as string);
-    return (await readAutosave())?.project.image.source.kind ?? null;
-  })).toBe('tiles');
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const { readAutosave } = await import('/src/io/autosave.ts' as string);
+        return (await readAutosave())?.project.image.source.kind ?? null;
+      }),
+    )
+    .toBe('tiles');
   const fetchedBeforeReload = tileUrls(seen).length;
   await openReadyApp(page);
   await page.getByRole('button', { name: /^Resume / }).click();
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.image.source.kind ?? null)).toBe('tiles');
-  expect(await page.evaluate(() => window.__trailmaker!.session.getSession()!.map.tiles?.levels.length ?? 0)).toBeGreaterThan(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__trailmaker?.session.getSession()?.project.image.source.kind ?? null,
+      ),
+    )
+    .toBe('tiles');
+  expect(
+    await page.evaluate(
+      () => window.__trailmaker!.session.getSession()!.map.tiles?.levels.length ?? 0,
+    ),
+  ).toBeGreaterThan(0);
   expect(tileUrls(seen).length).toBe(fetchedBeforeReload);
 });
 
-test('a paused tile download resumes after reload without refetching saved tiles [T-329]', async ({ page }) => {
+test('a paused tile download resumes after reload without refetching saved tiles [T-329]', async ({
+  page,
+}) => {
   test.setTimeout(120_000);
   const seen: string[] = [];
   await stubTiledService(page, seen);
@@ -187,7 +213,15 @@ test('a paused tile download resumes after reload without refetching saved tiles
   const resumed = page.getByRole('dialog', { name: 'Capture satellite map' });
   await resumed.getByRole('button', { name: /Resume saved z20 download/ }).click();
   await resumed.getByRole('button', { name: 'Download offline tiles' }).click();
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.project.image.source.kind ?? null), { timeout: 60_000 }).toBe('tiles');
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window.__trailmaker?.session.getSession()?.project.image.source.kind ?? null,
+        ),
+      { timeout: 60_000 },
+    )
+    .toBe('tiles');
   const later = tileUrls(seen).slice(fetchedBeforeReload);
   for (const key of completedKeys) {
     const [z, x, y] = key.split('/');
@@ -201,7 +235,15 @@ test('deleting and re-downloading tiles keeps the edited project [T-329]', async
   await stubTiledService(page, seen);
   const initialOverlay = await drawBoundary(page);
   await initialOverlay.getByRole('button', { name: 'Download offline tiles' }).click();
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.map.tiles?.levels.length ?? 0), { timeout: 60_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window.__trailmaker?.session.getSession()?.map.tiles?.levels.length ?? 0,
+        ),
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThan(0);
 
   const before = await page.evaluate(() => {
     const bridge = window.__trailmaker!.session;
@@ -220,7 +262,10 @@ test('deleting and re-downloading tiles keeps the edited project [T-329]', async
             name: 'Saved trail',
             color: '#D9480F',
             notes: 'Keep across tile refresh',
-            pts: [[100, 100], [200, 200]] as const,
+            pts: [
+              [100, 100],
+              [200, 200],
+            ] as const,
             ink: null,
           },
         ],
@@ -235,9 +280,101 @@ test('deleting and re-downloading tiles keeps the edited project [T-329]', async
   await overlay.getByRole('button', { name: 'Delete downloaded imagery' }).click();
   await expect(overlay.getByRole('button', { name: 'Re-download offline tiles' })).toBeVisible();
   await overlay.getByRole('button', { name: 'Re-download offline tiles' }).click();
-  await expect(overlay.getByRole('button', { name: 'Download offline tiles', exact: true })).toBeVisible();
+  await expect(
+    overlay.getByRole('button', { name: 'Download offline tiles', exact: true }),
+  ).toBeVisible();
   await overlay.getByRole('button', { name: 'Download offline tiles', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.__trailmaker?.session.getSession()?.map.tiles?.levels.length ?? 0), { timeout: 60_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () => window.__trailmaker?.session.getSession()?.map.tiles?.levels.length ?? 0,
+        ),
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThan(0);
   const after = await page.evaluate(() => window.__trailmaker!.session.getSession()!.project);
   expect(after).toEqual(before);
 });
+
+for (const viewport of [
+  { width: 360, height: 740 },
+  { width: 412, height: 915 },
+]) {
+  test.describe(`phone boundary drawing ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport, isMobile: true, hasTouch: true, colorScheme: 'dark' });
+
+    test('leaves the map tappable, closes four points and cancels a redraw [T-336]', async ({
+      page,
+    }, testInfo) => {
+      await stubTiledService(page, []);
+      const overlay = await openTiledCapture(page);
+      await overlay.getByRole('button', { name: 'Draw tiled boundary', exact: true }).tap();
+      await expect(overlay.getByRole('heading', { name: 'Draw park boundary' })).toBeVisible();
+      await expect(overlay.getByLabel('Capture imagery source')).not.toBeVisible();
+      await expect(
+        overlay.getByRole('button', { name: 'Capture map', exact: true }),
+      ).not.toBeVisible();
+      const canvas = page.locator('canvas.maplibregl-canvas').last();
+      await canvas.scrollIntoViewIfNeeded();
+      const mapBox = (await canvas.boundingBox())!;
+      const controls = (await overlay.locator('.is-drawing-boundary').boundingBox())!;
+      expect(controls.height).toBeLessThanOrEqual(mapBox.height / 3);
+      expect(controls.y).toBeGreaterThanOrEqual(mapBox.y + (mapBox.height * 2) / 3);
+      const count = overlay.getByRole('status').filter({ hasText: /points? · Tap map to add/ });
+      await expect(count).toContainText('0 points');
+      const close = overlay.getByRole('button', { name: 'Close boundary', exact: true });
+      await expect(close).toBeDisabled();
+      await page.screenshot({ path: testInfo.outputPath('drawing-empty.png') });
+      for (const [index, [x, y]] of [
+        [0.22, 0.3],
+        [0.78, 0.3],
+        [0.78, 0.6],
+        [0.22, 0.6],
+      ].entries()) {
+        const client = { x: mapBox.x + mapBox.width * x!, y: mapBox.y + mapBox.height * y! };
+        const hit = await canvas.evaluate((el, p) => {
+          const target = document.elementFromPoint(p.x, p.y);
+          return {
+            onMap: el.contains(target),
+            target: target?.tagName,
+            className: target?.className,
+            point: p,
+          };
+        }, client);
+        expect(hit).toMatchObject({ onMap: true });
+        await page.touchscreen.tap(client.x, client.y);
+        await expect(count).toContainText(`${index + 1} ${index === 0 ? 'point' : 'points'}`);
+        if (index === 1) await expect(close).toBeDisabled();
+      }
+      await expect(close).toBeEnabled();
+      await page.screenshot({ path: testInfo.outputPath('drawing.png') });
+      await close.tap();
+      await expect(overlay.getByRole('heading', { name: 'Frame area to capture' })).toBeVisible();
+      await expect(overlay.getByLabel('Capture imagery source')).toBeVisible();
+      await expect(
+        overlay
+          .getByRole('group', { name: 'Park boundary points' })
+          .getByRole('button', { name: /^Point \d/ }),
+      ).toHaveCount(4);
+      await overlay.getByRole('button', { name: 'Draw tiled boundary', exact: true }).tap();
+      await expect(count).toContainText('0 points');
+      await overlay.getByRole('button', { name: 'Cancel boundary', exact: true }).tap();
+      await expect(overlay.getByRole('heading', { name: 'Frame area to capture' })).toBeVisible();
+      await expect(overlay.getByRole('group', { name: 'Park boundary points' })).not.toBeVisible();
+      await overlay.getByRole('button', { name: 'Draw tiled boundary', exact: true }).tap();
+      const keyboard = overlay
+        .getByRole('group', { name: 'Park boundary points' })
+        .locator('[tabindex="0"]');
+      await keyboard.focus();
+      await keyboard.press('Enter');
+      await expect(count).toContainText('1 point');
+      const point = overlay.getByRole('button', { name: /^Point 1 ·/ });
+      const beforeNudge = await point.textContent();
+      await keyboard.press('ArrowRight');
+      await expect(point).not.toHaveText(beforeNudge!);
+      await overlay.getByRole('button', { name: 'Cancel boundary', exact: true }).tap();
+      await expect(overlay.getByRole('heading', { name: 'Frame area to capture' })).toBeVisible();
+    });
+  });
+}

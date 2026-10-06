@@ -939,6 +939,113 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
     (!activeSession?.map.tiles || deletedTileMapId === activeTiledMapId);
   if (!isOpen) return null;
 
+  const boundaryEditor = (
+    <div className="trailmaker-boundary-editor">
+      {drawingBoundary && (
+        <p className="trailmaker-boundary-status" role="status">
+          {tileBoundary.length} {tileBoundary.length === 1 ? 'point' : 'points'} · Tap map to add
+        </p>
+      )}
+      <p className="trailmaker-framing-hint" hidden={drawingBoundary}>
+        {drawingBoundary
+          ? 'Click the basemap to add boundary points, then close the boundary when it surrounds the park. Press Enter to add a point at the map center; C closes it.'
+          : 'Select a point, then use arrow keys to nudge or drag its marker. Delete removes the selected point.'}
+      </p>
+      <div
+        role="group"
+        aria-label="Park boundary points"
+        className="trailmaker-boundary-points"
+        aria-description={
+          drawingBoundary
+            ? 'Enter adds a point at the map center; C closes the boundary; Escape cancels.'
+            : 'Select a point, use arrow keys to nudge it, or Delete to remove it.'
+        }
+      >
+        <div
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (drawingBoundary && event.key === 'Enter' && map) {
+              event.preventDefault();
+              const center = map.getCenter();
+              setTileBoundary((current) => [...current, [center.lat, center.lng]]);
+              setSelectedBoundaryIndex(tileBoundary.length);
+              return;
+            }
+            if (drawingBoundary && event.key.toLowerCase() === 'c' && tileBoundary.length >= 3) {
+              event.preventDefault();
+              setDrawingBoundary(false);
+              return;
+            }
+            if (drawingBoundary && event.key === 'Escape') {
+              event.preventDefault();
+              setDrawingBoundary(false);
+              setTileBoundary([]);
+              return;
+            }
+            if (selectedBoundaryIndex === null || !tileBoundary[selectedBoundaryIndex]) return;
+            const [lat, lon] = tileBoundary[selectedBoundaryIndex]!;
+            const delta = event.shiftKey ? 0.0001 : 0.00002;
+            const offsets: Record<string, readonly [number, number]> = {
+              ArrowUp: [delta, 0],
+              ArrowDown: [-delta, 0],
+              ArrowLeft: [0, -delta],
+              ArrowRight: [0, delta],
+            };
+            const offset = offsets[event.key];
+            if (offset) {
+              event.preventDefault();
+              setTileBoundary((current) =>
+                current.map((point, index) =>
+                  index === selectedBoundaryIndex ? [lat + offset[0], lon + offset[1]] : point,
+                ),
+              );
+            } else if (event.key === 'Delete' || event.key === 'Backspace') {
+              event.preventDefault();
+              setTileBoundary((current) =>
+                current.filter((_, index) => index !== selectedBoundaryIndex),
+              );
+              setSelectedBoundaryIndex(null);
+            }
+          }}
+        >
+          {tileBoundary.map(([lat, lon], index) => (
+            <button
+              key={`${index}-${lat}-${lon}`}
+              type="button"
+              aria-pressed={selectedBoundaryIndex === index}
+              onClick={() => setSelectedBoundaryIndex(index)}
+            >
+              Point {index + 1} · {lat.toFixed(5)}, {lon.toFixed(5)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="trailmaker-boundary-actions">
+        {drawingBoundary && (
+          <button
+            type="button"
+            className="btn small"
+            disabled={tileBoundary.length < 3}
+            onClick={() => setDrawingBoundary(false)}
+          >
+            Close boundary
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn small"
+          onClick={() => {
+            setDrawingBoundary(false);
+            setTileBoundary([]);
+            setTileEstimate(null);
+          }}
+        >
+          Cancel boundary
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div
       ref={containerRef}
@@ -977,457 +1084,375 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
           </button>
         </div>
 
-        <p className="trailmaker-framing-hint">
-          {drawingBoundary
-            ? 'Click the basemap to outline the park boundary, or use the keyboard controls below.'
-            : 'Pan and zoom the satellite map to position your park or trail area inside the frame.'}
-        </p>
-
-        <section className="trailmaker-tiled-capture" aria-label="Tiled imagery capture">
-          {activeTiledMapNeedsDownload && (
-            <button
-              type="button"
-              className="btn small"
-              disabled={tileSourceLoading || tileDownloading || tileDeleting}
-              onClick={() => void handleRedownloadTiledMap()}
-            >
-              Re-download offline tiles
-            </button>
-          )}
-          {activeTiledMapId && !activeTiledMapNeedsDownload && (
-            <button
-              type="button"
-              className="btn small"
-              disabled={tileDeleting || tileDownloading}
-              onClick={() => void handleDeleteDownloadedImagery()}
-            >
-              Delete downloaded imagery
-            </button>
-          )}
-          {resumableTileDownloads.map((manifest) => (
-            <button
-              key={manifest.mapId}
-              type="button"
-              className="btn small"
-              disabled={tileSourceLoading || tileDownloading}
-              onClick={() => void handleResumeTileDownload(manifest)}
-            >
-              Resume saved z{manifest.z} download ·{' '}
-              {countPlannedTileKeys(manifest.tiles, manifest.completedKeys)}/{manifest.tiles.length}{' '}
-              tiles saved
-            </button>
-          ))}
-          <button
-            type="button"
-            className="btn small"
-            disabled={capturing || tileDownloading || tileSourceLoading || !map}
-            onClick={() => void handleStartBoundary()}
-          >
-            {tileSourceLoading
-              ? 'Checking county tiles…'
-              : !map
-                ? 'Waiting for basemap…'
-                : drawingBoundary
-                  ? 'Drawing boundary…'
-                  : 'Draw tiled boundary'}
-          </button>
-          {tileError && (
-            <p role="alert" className="trailmaker-framing-error">
-              {tileError}
+        {drawingBoundary && boundaryEditor}
+        {!drawingBoundary && (
+          <>
+            <p className="trailmaker-framing-hint">
+              {drawingBoundary
+                ? 'Click the basemap to outline the park boundary, or use the keyboard controls below.'
+                : 'Pan and zoom the satellite map to position your park or trail area inside the frame.'}
             </p>
-          )}
-          {(drawingBoundary || tileBoundary.length > 0) && (
-            <div>
-              <p className="trailmaker-framing-hint">
-                {drawingBoundary
-                  ? 'Click the basemap to add boundary points, then close the boundary when it surrounds the park. Press Enter to add a point at the map center; C closes it.'
-                  : 'Select a point, then use arrow keys to nudge or drag its marker. Delete removes the selected point.'}
-              </p>
-              <div role="group" aria-label="Park boundary points">
-                <div
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (drawingBoundary && event.key === 'Enter' && map) {
-                      event.preventDefault();
-                      const center = map.getCenter();
-                      setTileBoundary((current) => [...current, [center.lat, center.lng]]);
-                      setSelectedBoundaryIndex(tileBoundary.length);
-                      return;
-                    }
-                    if (
-                      drawingBoundary &&
-                      event.key.toLowerCase() === 'c' &&
-                      tileBoundary.length >= 3
-                    ) {
-                      event.preventDefault();
-                      setDrawingBoundary(false);
-                      return;
-                    }
-                    if (drawingBoundary && event.key === 'Escape') {
-                      event.preventDefault();
-                      setDrawingBoundary(false);
-                      setTileBoundary([]);
-                      return;
-                    }
-                    if (selectedBoundaryIndex === null || !tileBoundary[selectedBoundaryIndex])
-                      return;
-                    const [lat, lon] = tileBoundary[selectedBoundaryIndex]!;
-                    const delta = event.shiftKey ? 0.0001 : 0.00002;
-                    const offsets: Record<string, readonly [number, number]> = {
-                      ArrowUp: [delta, 0],
-                      ArrowDown: [-delta, 0],
-                      ArrowLeft: [0, -delta],
-                      ArrowRight: [0, delta],
-                    };
-                    const offset = offsets[event.key];
-                    if (offset) {
-                      event.preventDefault();
-                      setTileBoundary((current) =>
-                        current.map((point, index) =>
-                          index === selectedBoundaryIndex
-                            ? [lat + offset[0], lon + offset[1]]
-                            : point,
-                        ),
-                      );
-                    } else if (event.key === 'Delete' || event.key === 'Backspace') {
-                      event.preventDefault();
-                      setTileBoundary((current) =>
-                        current.filter((_, index) => index !== selectedBoundaryIndex),
-                      );
-                      setSelectedBoundaryIndex(null);
-                    }
-                  }}
-                >
-                  {tileBoundary.map(([lat, lon], index) => (
-                    <button
-                      key={`${index}-${lat}-${lon}`}
-                      type="button"
-                      aria-pressed={selectedBoundaryIndex === index}
-                      onClick={() => setSelectedBoundaryIndex(index)}
-                    >
-                      Point {index + 1} · {lat.toFixed(5)}, {lon.toFixed(5)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {drawingBoundary && (
+
+            <section className="trailmaker-tiled-capture" aria-label="Tiled imagery capture">
+              {activeTiledMapNeedsDownload && (
                 <button
                   type="button"
                   className="btn small"
-                  disabled={tileBoundary.length < 3}
-                  onClick={() => setDrawingBoundary(false)}
+                  disabled={tileSourceLoading || tileDownloading || tileDeleting}
+                  onClick={() => void handleRedownloadTiledMap()}
                 >
-                  Close boundary
+                  Re-download offline tiles
                 </button>
               )}
+              {activeTiledMapId && !activeTiledMapNeedsDownload && (
+                <button
+                  type="button"
+                  className="btn small"
+                  disabled={tileDeleting || tileDownloading}
+                  onClick={() => void handleDeleteDownloadedImagery()}
+                >
+                  Delete downloaded imagery
+                </button>
+              )}
+              {resumableTileDownloads.map((manifest) => (
+                <button
+                  key={manifest.mapId}
+                  type="button"
+                  className="btn small"
+                  disabled={tileSourceLoading || tileDownloading}
+                  onClick={() => void handleResumeTileDownload(manifest)}
+                >
+                  Resume saved z{manifest.z} download ·{' '}
+                  {countPlannedTileKeys(manifest.tiles, manifest.completedKeys)}/
+                  {manifest.tiles.length} tiles saved
+                </button>
+              ))}
               <button
                 type="button"
                 className="btn small"
-                onClick={() => {
-                  setDrawingBoundary(false);
-                  setTileBoundary([]);
-                  setTileEstimate(null);
-                }}
+                disabled={capturing || tileDownloading || tileSourceLoading || !map}
+                onClick={() => void handleStartBoundary()}
               >
-                Cancel boundary
+                {tileSourceLoading
+                  ? 'Checking county tiles…'
+                  : !map
+                    ? 'Waiting for basemap…'
+                    : drawingBoundary
+                      ? 'Drawing boundary…'
+                      : 'Draw tiled boundary'}
               </button>
-            </div>
-          )}
-          {tileSource && !drawingBoundary && (
-            <div>
-              <label htmlFor="tiled-capture-zoom">Tile detail</label>
+              {tileError && (
+                <p role="alert" className="trailmaker-framing-error">
+                  {tileError}
+                </p>
+              )}
+              {tileBoundary.length > 0 && boundaryEditor}
+              {tileSource && !drawingBoundary && (
+                <div>
+                  <label htmlFor="tiled-capture-zoom">Tile detail</label>
+                  <select
+                    id="tiled-capture-zoom"
+                    value={tileZoom}
+                    disabled={tileDownloading}
+                    onChange={(event) => {
+                      setTileZoom(Number(event.target.value));
+                      setTileEstimate(null);
+                    }}
+                  >
+                    {tileDetailLevels.map((level) => (
+                      <option key={level.z} value={level.z}>
+                        {tileSource.id === 'martin-county' && level.z === DEFAULT_TILE_ZOOM
+                          ? 'Standard · '
+                          : ''}
+                        z{level.z} · {(level.resolutionM * 100).toFixed(1)} cm/px
+                      </option>
+                    ))}
+                  </select>
+                  {tiledPlan && (
+                    <p className="trailmaker-framing-hint">
+                      {(tiledPlan.areaSqMeters / 1_000_000).toFixed(2)} km² ·{' '}
+                      {tiledPlan.tiles.length.toLocaleString()} tiles
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={!tiledPlan || tileDownloading}
+                    onClick={() => void handleEstimateTiles()}
+                  >
+                    Estimate download
+                  </button>
+                  {tileEstimate && (
+                    <p role="status">
+                      About {(tileEstimate.estimatedBytes / 1_048_576).toFixed(1)} MB · about{' '}
+                      {Math.ceil(tileEstimate.estimatedSeconds / 60)} min at the service request
+                      limit.
+                    </p>
+                  )}
+                  {tileEstimate?.enoughSpace === false && (
+                    <label className="trailmaker-framing-warning">
+                      <input
+                        type="checkbox"
+                        checked={tileStorageConfirmed}
+                        onChange={(event) => setTileStorageConfirmed(event.target.checked)}
+                      />{' '}
+                      Available storage is below 1.5× the estimate. Continue anyway?
+                    </label>
+                  )}
+                  {tileProgress && (
+                    <p role="status">
+                      Tiles: {tileProgress.complete}/{tileProgress.total}; missing:{' '}
+                      {tileProgress.missing}
+                    </p>
+                  )}
+                  {tileDownloading && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn small"
+                        onClick={() => {
+                          if (tilePaused) tileCaptureRef.current?.resume();
+                          else tileCaptureRef.current?.pause();
+                          setTilePaused(!tilePaused);
+                        }}
+                      >
+                        {tilePaused ? 'Resume download' : 'Pause download'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn small"
+                        onClick={() => tileCaptureRef.current?.cancel()}
+                      >
+                        Cancel tile download
+                      </button>
+                    </>
+                  )}
+                  {tileEstimate && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      disabled={isTiledDownloadDisabled(
+                        tileSourceLoading || tileDeleting,
+                        tileDownloading,
+                        tileEstimate.enoughSpace,
+                        tileStorageConfirmed,
+                      )}
+                      onClick={() => void handleDownloadTiles()}
+                    >
+                      {tileDownloading
+                        ? 'Downloading…'
+                        : tileProgress?.missing
+                          ? `Retry ${tileProgress.missing} missing tiles`
+                          : 'Download offline tiles'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <div className="trailmaker-imagery-source-picker">
+              <label htmlFor="capture-imagery-source">Capture imagery source</label>
               <select
-                id="tiled-capture-zoom"
-                value={tileZoom}
-                disabled={tileDownloading}
+                id="capture-imagery-source"
+                value={activeSource?.id ?? 'naip'}
                 onChange={(event) => {
-                  setTileZoom(Number(event.target.value));
-                  setTileEstimate(null);
+                  setSelectedSourceId(event.target.value);
+                  setSelectedZoom(null);
+                  setRightsConfirmed(false);
+                  setTileSource(null);
                 }}
+                disabled={capturing}
               >
-                {tileDetailLevels.map((level) => (
-                  <option key={level.z} value={level.z}>
-                    {tileSource.id === 'martin-county' && level.z === DEFAULT_TILE_ZOOM
-                      ? 'Standard · '
-                      : ''}
-                    z{level.z} · {(level.resolutionM * 100).toFixed(1)} cm/px
+                <option value="naip">USGS NAIP (fallback)</option>
+                {sources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                    {source.year ? ` (${source.year})` : ''} · about{' '}
+                    {sourceResolution(source).toFixed(2)} m/px
                   </option>
                 ))}
               </select>
-              {tiledPlan && (
+              {activeSource && (
                 <p className="trailmaker-framing-hint">
-                  {(tiledPlan.areaSqMeters / 1_000_000).toFixed(2)} km² ·{' '}
-                  {tiledPlan.tiles.length.toLocaleString()} tiles
+                  {activeSource.name}
+                  {activeSource.year
+                    ? ` (${activeSource.year}${activeSource.id === 'martin-county' ? ', as reported by the service' : ''})`
+                    : ''}{' '}
+                  · {(activeSource.nominalResolutionM * 100).toFixed(1)} cm/px
+                  {activeSource.nominalResolutionM < 0.3 ? ', sharper than NAIP here' : ''} ·{' '}
+                  {activeSource.attribution}
                 </p>
               )}
-              <button
-                type="button"
-                className="btn small"
-                disabled={!tiledPlan || tileDownloading}
-                onClick={() => void handleEstimateTiles()}
-              >
-                Estimate download
-              </button>
-              {tileEstimate && (
-                <p role="status">
-                  About {(tileEstimate.estimatedBytes / 1_048_576).toFixed(1)} MB · about{' '}
-                  {Math.ceil(tileEstimate.estimatedSeconds / 60)} min at the service request limit.
-                </p>
-              )}
-              {tileEstimate?.enoughSpace === false && (
-                <label className="trailmaker-framing-warning">
-                  <input
-                    type="checkbox"
-                    checked={tileStorageConfirmed}
-                    onChange={(event) => setTileStorageConfirmed(event.target.checked)}
-                  />{' '}
-                  Available storage is below 1.5× the estimate. Continue anyway?
-                </label>
-              )}
-              {tileProgress && (
-                <p role="status">
-                  Tiles: {tileProgress.complete}/{tileProgress.total}; missing:{' '}
-                  {tileProgress.missing}
-                </p>
-              )}
-              {tileDownloading && (
-                <>
-                  <button
-                    type="button"
-                    className="btn small"
-                    onClick={() => {
-                      if (tilePaused) tileCaptureRef.current?.resume();
-                      else tileCaptureRef.current?.pause();
-                      setTilePaused(!tilePaused);
-                    }}
-                  >
-                    {tilePaused ? 'Resume download' : 'Pause download'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn small"
-                    onClick={() => tileCaptureRef.current?.cancel()}
-                  >
-                    Cancel tile download
-                  </button>
-                </>
-              )}
-              {tileEstimate && (
+              <label htmlFor="capture-imagery-url">
+                Use another imagery service (ArcGIS REST URL)
+              </label>
+              <div className="trailmaker-imagery-url-row">
+                <input
+                  id="capture-imagery-url"
+                  type="url"
+                  value={serviceUrl}
+                  onChange={(event) => setServiceUrl(event.target.value)}
+                  placeholder="https://…/MapServer or /ImageServer"
+                  autoComplete="url"
+                />
                 <button
                   type="button"
                   className="btn small"
-                  disabled={isTiledDownloadDisabled(
-                    tileSourceLoading || tileDeleting,
-                    tileDownloading,
-                    tileEstimate.enoughSpace,
-                    tileStorageConfirmed,
-                  )}
-                  onClick={() => void handleDownloadTiles()}
+                  disabled={serviceLoading || capturing || !serviceUrl.trim()}
+                  onClick={() => void inspectService(serviceUrl)}
                 >
-                  {tileDownloading
-                    ? 'Downloading…'
-                    : tileProgress?.missing
-                      ? `Retry ${tileProgress.missing} missing tiles`
-                      : 'Download offline tiles'}
+                  {serviceLoading ? 'Checking…' : 'Check service'}
                 </button>
+              </div>
+              {activeSource && isCustomSource && (
+                <>
+                  <p className="trailmaker-framing-hint">Credit: {activeSource.attribution}</p>
+                  <label className="trailmaker-imagery-rights">
+                    <input
+                      type="checkbox"
+                      checked={rightsConfirmed}
+                      onChange={(event) => setRightsConfirmed(event.target.checked)}
+                      disabled={capturing}
+                    />{' '}
+                    I have the right to use this imagery.
+                  </label>
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={!rightsConfirmed || tileSourceLoading}
+                    onClick={() => void handleUseCustomTiledService()}
+                  >
+                    Use this cached service for tiled capture
+                  </button>
+                </>
               )}
             </div>
-          )}
-        </section>
 
-        <div className="trailmaker-imagery-source-picker">
-          <label htmlFor="capture-imagery-source">Capture imagery source</label>
-          <select
-            id="capture-imagery-source"
-            value={activeSource?.id ?? 'naip'}
-            onChange={(event) => {
-              setSelectedSourceId(event.target.value);
-              setSelectedZoom(null);
-              setRightsConfirmed(false);
-              setTileSource(null);
-            }}
-            disabled={capturing}
-          >
-            <option value="naip">USGS NAIP (fallback)</option>
-            {sources.map((source) => (
-              <option key={source.id} value={source.id}>
-                {source.name}
-                {source.year ? ` (${source.year})` : ''} · about{' '}
-                {sourceResolution(source).toFixed(2)} m/px
-              </option>
-            ))}
-          </select>
-          {activeSource && (
-            <p className="trailmaker-framing-hint">
-              {activeSource.name}
-              {activeSource.year
-                ? ` (${activeSource.year}${activeSource.id === 'martin-county' ? ', as reported by the service' : ''})`
-                : ''}{' '}
-              · {(activeSource.nominalResolutionM * 100).toFixed(1)} cm/px
-              {activeSource.nominalResolutionM < 0.3 ? ', sharper than NAIP here' : ''} ·{' '}
-              {activeSource.attribution}
-            </p>
-          )}
-          <label htmlFor="capture-imagery-url">Use another imagery service (ArcGIS REST URL)</label>
-          <div className="trailmaker-imagery-url-row">
-            <input
-              id="capture-imagery-url"
-              type="url"
-              value={serviceUrl}
-              onChange={(event) => setServiceUrl(event.target.value)}
-              placeholder="https://…/MapServer or /ImageServer"
-              autoComplete="url"
-            />
-            <button
-              type="button"
-              className="btn small"
-              disabled={serviceLoading || capturing || !serviceUrl.trim()}
-              onClick={() => void inspectService(serviceUrl)}
-            >
-              {serviceLoading ? 'Checking…' : 'Check service'}
-            </button>
-          </div>
-          {activeSource && isCustomSource && (
-            <>
-              <p className="trailmaker-framing-hint">Credit: {activeSource.attribution}</p>
-              <label className="trailmaker-imagery-rights">
-                <input
-                  type="checkbox"
-                  checked={rightsConfirmed}
-                  onChange={(event) => setRightsConfirmed(event.target.checked)}
-                  disabled={capturing}
-                />{' '}
-                I have the right to use this imagery.
+            {activeProvider === 'esri' && (
+              <div className="trailmaker-framing-esri-notice" role="status">
+                <span>
+                  Esri doesn't permit offline export, so the captured map uses public-domain NAIP
+                  (USGS elsewhere). After capture, switch the editor backdrop to Esri (live) to
+                  trace on Esri imagery.
+                </span>
+                {onSwitchProvider && (
+                  <button
+                    type="button"
+                    className="btn small"
+                    onClick={() => onSwitchProvider('usgs')}
+                  >
+                    Switch to USGS
+                  </button>
+                )}
+              </div>
+            )}
+
+            {dims && (
+              <div className="trailmaker-framing-specs" aria-live="polite">
+                <span className="trailmaker-framing-dim">
+                  <strong>
+                    {dims.width.toLocaleString()} × {dims.height.toLocaleString()} px
+                  </strong>
+                </span>
+                <span className="trailmaker-framing-sep">•</span>
+                <span className="trailmaker-framing-res">
+                  {activeSource
+                    ? `${activeSource.name} · about ${groundResolution((bounds!.north + bounds!.south) / 2, effectiveZoom).toFixed(3)} m per pixel`
+                    : `USGS NAIP · about ${dims.metersPerPixel.toFixed(1)} m per pixel`}
+                </span>
+                <span className="trailmaker-framing-sep">•</span>
+                <span className="trailmaker-framing-tiles">
+                  {naipRequestCount} export {naipRequestCount === 1 ? 'request' : 'requests'}
+                </span>
+              </div>
+            )}
+
+            {exceedsLimits && (
+              <div className="trailmaker-framing-warning" role="alert">
+                Framed area exceeds maximum capture limits (12,000 px or 16 requests). Zoom out or
+                frame a smaller area.
+              </div>
+            )}
+
+            {error && (
+              <div className="trailmaker-framing-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            {/* Zoom adjustment control */}
+            <div className="trailmaker-framing-zoom-row">
+              <label htmlFor="satellite-zoom-stepper" className="trailmaker-framing-zoom-label">
+                Capture zoom:
               </label>
+              <div className="trailmaker-framing-zoom-controls" id="satellite-zoom-stepper">
+                <button
+                  type="button"
+                  className="trailmaker-framing-zoom-btn"
+                  disabled={effectiveZoom <= zoomRange.minZoom || capturing}
+                  onClick={() => setSelectedZoom(effectiveZoom - 1)}
+                  aria-label="Decrease capture zoom"
+                  title="Decrease zoom (smaller image, faster)"
+                >
+                  −
+                </button>
+                <span
+                  className="trailmaker-framing-zoom-value"
+                  aria-label={`Zoom level ${effectiveZoom.toFixed(1)}`}
+                >
+                  {effectiveZoom.toFixed(1)}
+                </span>
+                <button
+                  type="button"
+                  className="trailmaker-framing-zoom-btn"
+                  disabled={effectiveZoom >= zoomRange.maxZoom || capturing}
+                  onClick={() => setSelectedZoom(effectiveZoom + 1)}
+                  aria-label="Increase capture zoom"
+                  title="Increase zoom (higher detail)"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {/* Progress indicator during tile fetching */}
+            {capturing && progress && (
+              <div
+                className="trailmaker-framing-progress"
+                role="progressbar"
+                aria-valuenow={progress.loaded}
+                aria-valuemax={progress.total}
+              >
+                <div className="trailmaker-framing-progress-label">{progress.stage}</div>
+                <div className="trailmaker-framing-progress-track">
+                  <div
+                    className="trailmaker-framing-progress-fill"
+                    style={{
+                      width: `${progress.total ? Math.round((progress.loaded / progress.total) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="trailmaker-framing-actions">
+              <button type="button" className="btn" onClick={handleCancelCapture}>
+                Cancel
+              </button>
               <button
                 type="button"
-                className="btn small"
-                disabled={!rightsConfirmed || tileSourceLoading}
-                onClick={() => void handleUseCustomTiledService()}
+                className="btn primary"
+                disabled={
+                  exceedsLimits || capturing || !dims || (isCustomSource && !rightsConfirmed)
+                }
+                onClick={handleStartCapture}
               >
-                Use this cached service for tiled capture
+                {capturing ? 'Capturing…' : 'Capture map'}
               </button>
-            </>
-          )}
-        </div>
-
-        {activeProvider === 'esri' && (
-          <div className="trailmaker-framing-esri-notice" role="status">
-            <span>
-              Esri doesn't permit offline export, so the captured map uses public-domain NAIP (USGS
-              elsewhere). After capture, switch the editor backdrop to Esri (live) to trace on Esri
-              imagery.
-            </span>
-            {onSwitchProvider && (
-              <button type="button" className="btn small" onClick={() => onSwitchProvider('usgs')}>
-                Switch to USGS
-              </button>
-            )}
-          </div>
-        )}
-
-        {dims && (
-          <div className="trailmaker-framing-specs" aria-live="polite">
-            <span className="trailmaker-framing-dim">
-              <strong>
-                {dims.width.toLocaleString()} × {dims.height.toLocaleString()} px
-              </strong>
-            </span>
-            <span className="trailmaker-framing-sep">•</span>
-            <span className="trailmaker-framing-res">
-              {activeSource
-                ? `${activeSource.name} · about ${groundResolution((bounds!.north + bounds!.south) / 2, effectiveZoom).toFixed(3)} m per pixel`
-                : `USGS NAIP · about ${dims.metersPerPixel.toFixed(1)} m per pixel`}
-            </span>
-            <span className="trailmaker-framing-sep">•</span>
-            <span className="trailmaker-framing-tiles">
-              {naipRequestCount} export {naipRequestCount === 1 ? 'request' : 'requests'}
-            </span>
-          </div>
-        )}
-
-        {exceedsLimits && (
-          <div className="trailmaker-framing-warning" role="alert">
-            Framed area exceeds maximum capture limits (12,000 px or 16 requests). Zoom out or frame
-            a smaller area.
-          </div>
-        )}
-
-        {error && (
-          <div className="trailmaker-framing-error" role="alert">
-            {error}
-          </div>
-        )}
-
-        {/* Zoom adjustment control */}
-        <div className="trailmaker-framing-zoom-row">
-          <label htmlFor="satellite-zoom-stepper" className="trailmaker-framing-zoom-label">
-            Capture zoom:
-          </label>
-          <div className="trailmaker-framing-zoom-controls" id="satellite-zoom-stepper">
-            <button
-              type="button"
-              className="trailmaker-framing-zoom-btn"
-              disabled={effectiveZoom <= zoomRange.minZoom || capturing}
-              onClick={() => setSelectedZoom(effectiveZoom - 1)}
-              aria-label="Decrease capture zoom"
-              title="Decrease zoom (smaller image, faster)"
-            >
-              −
-            </button>
-            <span
-              className="trailmaker-framing-zoom-value"
-              aria-label={`Zoom level ${effectiveZoom.toFixed(1)}`}
-            >
-              {effectiveZoom.toFixed(1)}
-            </span>
-            <button
-              type="button"
-              className="trailmaker-framing-zoom-btn"
-              disabled={effectiveZoom >= zoomRange.maxZoom || capturing}
-              onClick={() => setSelectedZoom(effectiveZoom + 1)}
-              aria-label="Increase capture zoom"
-              title="Increase zoom (higher detail)"
-            >
-              +
-            </button>
-          </div>
-        </div>
-
-        {/* Progress indicator during tile fetching */}
-        {capturing && progress && (
-          <div
-            className="trailmaker-framing-progress"
-            role="progressbar"
-            aria-valuenow={progress.loaded}
-            aria-valuemax={progress.total}
-          >
-            <div className="trailmaker-framing-progress-label">{progress.stage}</div>
-            <div className="trailmaker-framing-progress-track">
-              <div
-                className="trailmaker-framing-progress-fill"
-                style={{
-                  width: `${progress.total ? Math.round((progress.loaded / progress.total) * 100) : 0}%`,
-                }}
-              />
             </div>
-          </div>
+          </>
         )}
-
-        {/* Action buttons */}
-        <div className="trailmaker-framing-actions">
-          <button type="button" className="btn" onClick={handleCancelCapture}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={exceedsLimits || capturing || !dims || (isCustomSource && !rightsConfirmed)}
-            onClick={handleStartCapture}
-          >
-            {capturing ? 'Capturing…' : 'Capture map'}
-          </button>
-        </div>
       </div>
     </div>
   );
