@@ -11,9 +11,68 @@ import {
 import { DEFAULT_COLORS, type Feature, type FeatureId, type Px, type Trail } from '../core/types';
 import { applyTopologyEdit } from './commands';
 import { appStore, edit, showToast } from './store';
+import { selectTrails } from './store';
+import { autoJoinTrails, trailIntersectsRect, type TrailRect } from '../core/topology/autojoin';
 
 const state = () => appStore.getState();
 const project = () => state().session?.project ?? null;
+
+/** Select complete trails whose geometry intersects the map-pixel rectangle. */
+export function selectTrailsInRect(rect: TrailRect): void {
+  const p = project();
+  if (!p) return;
+  selectTrails(
+    p.features.filter((f) => f.kind === 'trail' && trailIntersectsRect(f, rect)).map((f) => f.id),
+  );
+  showToast(`Selected ${state().selectedTrailIds?.length ?? 0} trails`);
+}
+
+/** Preview only: applying it is a separate, explicit action. */
+export function previewAutoJoin(scale: number): void {
+  const s = state();
+  const p = project();
+  const selected = s.selectedTrailIds ?? [];
+  if (!p || s.draft || s.job || s.refinePreview || s.boxSelectMode || selected.length < 2) return;
+  appStore.setState({
+    boxJoinPreview: {
+      project: p,
+      proposal: autoJoinTrails(p.features, selected, {
+        tolerancePx: cleanupTolerancePx(scale),
+      }),
+    },
+  });
+}
+
+export function cancelAutoJoin(): void {
+  appStore.setState({ boxJoinPreview: null });
+}
+
+/** Apply the exact reviewed proposal as one history command; reject stale project snapshots. */
+export function applyAutoJoin(): boolean {
+  const preview = state().boxJoinPreview;
+  if (!preview || project() !== preview.project) {
+    cancelAutoJoin();
+    return false;
+  }
+  const result = preview.proposal.edit;
+  if (!result.updated.length && !result.removed.length) {
+    cancelAutoJoin();
+    return false;
+  }
+  const removedIds = new Set(result.removed);
+  const updatedById = new Map(result.updated.map((feature) => [feature.id, feature]));
+  const hadRouteCleared = preview.project.features.some((before) => {
+    if (before.kind !== 'trail' || !before.route) return false;
+    const after = updatedById.get(before.id);
+    return removedIds.has(before.id) || (after?.kind === 'trail' && !after.route);
+  });
+  cancelAutoJoin();
+  const applied = edit(applyTopologyEdit(preview.project, result, 'Auto-join trails'));
+  if (applied && hadRouteCleared) {
+    showToast('Route cleared: relabelling needed');
+  }
+  return applied;
+}
 
 /** "Clean up junctions" looks within this many screen px of the current zoom. */
 export const CLEANUP_SNAP_SCREEN_PX = 8;
@@ -59,9 +118,13 @@ export function splitHere(featureId: FeatureId, index: number): void {
   const p = project();
   const f = p?.features.find((x) => x.id === featureId);
   if (!p || !f || !canSplitAt(f, index)) return;
+  const hadRoute = !!(f as Trail).route;
   const result = splitTrail(f as Trail, index, `f${p.seq}`);
   const second = result.updated[1]!;
   edit(applyTopologyEdit(p, result), { feature: second.id });
+  if (hadRoute) {
+    showToast('Route cleared: relabelling needed');
+  }
 }
 
 /** Join the selected trail with the shift-clicked second trail (T-209 "Join trails" or J). */
@@ -71,8 +134,12 @@ export function joinSelected(): void {
   const a = p?.features.find((x) => x.id === s.selectedFeatureId);
   const b = p?.features.find((x) => x.id === s.secondSelectedFeatureId);
   if (!p || !a || !b || a.kind !== 'trail' || b.kind !== 'trail' || a.id === b.id) return;
+  const hadRoute = !!((a as Trail).route || (b as Trail).route);
   const result = joinTrails(a, b);
   edit(applyTopologyEdit(p, result), { feature: a.id });
+  if (hadRoute) {
+    showToast('Route cleared: relabelling needed');
+  }
 }
 
 /** Commit a new connector and any inserted shared junction vertices as one history command. */

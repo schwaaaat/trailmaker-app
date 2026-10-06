@@ -47,6 +47,14 @@ const TRAIL_LINE_LAYER = 'trailmaker-overlay-trails-line';
 const POI_CASING_LAYER = 'trailmaker-overlay-pois-casing';
 const POI_CIRCLE_LAYER = 'trailmaker-overlay-pois-circle';
 
+function createObjectUrl(blob: Blob): string | null {
+  return typeof URL.createObjectURL === 'function' ? URL.createObjectURL(blob) : null;
+}
+
+function revokeObjectUrl(url: string): void {
+  if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+}
+
 const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPreviewProps> = (
   { className = '', style, overrideStyleUrl, handleRef },
   forwardedRef,
@@ -124,7 +132,7 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
   useEffect(() => {
     if (!sessionMap) {
       if (jpegUrlRef.current) {
-        URL.revokeObjectURL(jpegUrlRef.current);
+        revokeObjectUrl(jpegUrlRef.current);
         jpegUrlRef.current = null;
       }
       setJpegUrl(null);
@@ -136,12 +144,16 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
       .then((bytes) => {
         if (isCancelled) return;
         if (jpegUrlRef.current) {
-          URL.revokeObjectURL(jpegUrlRef.current);
+          revokeObjectUrl(jpegUrlRef.current);
         }
         const blob = new Blob([bytes as unknown as BlobPart], {
           type: 'image/jpeg',
         });
-        const url = URL.createObjectURL(blob);
+        const url = createObjectUrl(blob);
+        if (!url) {
+          setJpegUrl(null);
+          return;
+        }
         jpegUrlRef.current = url;
         setJpegUrl(url);
       })
@@ -149,7 +161,11 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
         if (isCancelled) return;
         // Fallback for headless/JSDOM environments where canvas.toBlob is unavailable
         const fallbackBlob = new Blob([], { type: 'image/jpeg' });
-        const fallbackUrl = URL.createObjectURL(fallbackBlob);
+        const fallbackUrl = createObjectUrl(fallbackBlob);
+        if (!fallbackUrl) {
+          setJpegUrl(null);
+          return;
+        }
         jpegUrlRef.current = fallbackUrl;
         setJpegUrl(fallbackUrl);
       });
@@ -163,7 +179,7 @@ const OverlayPreviewComponent: ForwardRefRenderFunction<BasemapHandle, OverlayPr
   useEffect(() => {
     return () => {
       if (jpegUrlRef.current) {
-        URL.revokeObjectURL(jpegUrlRef.current);
+        revokeObjectUrl(jpegUrlRef.current);
         jpegUrlRef.current = null;
       }
     };

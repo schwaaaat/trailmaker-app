@@ -2,7 +2,7 @@
 // Lane B. Right-click vertex menu (card T-209): delete this vertex, or split the trail here.
 // A floating DOM overlay, not part of the canvas; the Editor class stays plain (no menu state).
 import { useEffect, useRef } from 'react';
-import { deleteVertex } from '../../state/commands';
+import { deleteVertex, setLoopStart, setOneWayStart } from '../../state/commands';
 import { useApp } from '../../state/hooks';
 import { appStore, edit, openVertexMenu } from '../../state/store';
 import { splitHere } from '../../state/topology-actions';
@@ -23,6 +23,12 @@ export function VertexMenu() {
 
   if (!menu) return null;
   const p = appStore.getState().session?.project ?? null;
+  const f = p?.features.find((x) => x.id === menu.featureId);
+  const isTrail = f?.kind === 'trail';
+  const canSetLoopStart =
+    Boolean(isTrail && f.route?.kind === 'loop' && menu.index !== 0 && menu.index < f.pts.length - 1);
+  const canSetOneWayStart =
+    Boolean(isTrail && f.route?.kind === 'one-way' && menu.index === f.pts.length - 1);
 
   return (
     <div
@@ -32,10 +38,21 @@ export function VertexMenu() {
       className="vertex-menu"
       style={{ left: menu.client.x, top: menu.client.y }}
       onKeyDown={(event) => {
-        if (event.key.toLowerCase() === 's' && menu.canSplit) {
+        const key = event.key.toLowerCase();
+        if (key === 's' && menu.canSplit) {
           event.preventDefault();
           event.stopPropagation();
           splitHere(menu.featureId, menu.index);
+          openVertexMenu(null);
+        } else if (key === 't' && canSetLoopStart && p) {
+          event.preventDefault();
+          event.stopPropagation();
+          edit(setLoopStart(p, menu.featureId, menu.index));
+          openVertexMenu(null);
+        } else if (key === 't' && canSetOneWayStart && p) {
+          event.preventDefault();
+          event.stopPropagation();
+          edit(setOneWayStart(p, menu.featureId, 1));
           openVertexMenu(null);
         } else if (event.key === 'Delete' || event.key === 'Backspace') {
           event.preventDefault();
@@ -45,6 +62,34 @@ export function VertexMenu() {
         }
       }}
     >
+      {canSetLoopStart ? (
+        <button
+          type="button"
+          role="menuitem"
+          aria-keyshortcuts="T"
+          title="Set as loop start (T)"
+          onClick={() => {
+            if (p) edit(setLoopStart(p, menu.featureId, menu.index));
+            openVertexMenu(null);
+          }}
+        >
+          Set as loop start <kbd>T</kbd>
+        </button>
+      ) : null}
+      {canSetOneWayStart ? (
+        <button
+          type="button"
+          role="menuitem"
+          aria-keyshortcuts="T"
+          title="Set as trailhead (T)"
+          onClick={() => {
+            if (p) edit(setOneWayStart(p, menu.featureId, 1));
+            openVertexMenu(null);
+          }}
+        >
+          Set as trailhead <kbd>T</kbd>
+        </button>
+      ) : null}
       {menu.canSplit ? (
         <button
           type="button"

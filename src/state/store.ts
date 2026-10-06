@@ -4,6 +4,7 @@
 import { createStore } from 'zustand/vanilla';
 import { fitAnchors } from '../core/geo/fit';
 import { withLooResiduals } from '../core/geo/loo';
+import type { AutoJoinProposal } from '../core/topology/autojoin';
 import type {
   Anchor,
   AnchorId,
@@ -18,7 +19,7 @@ import type {
   Px,
   Rgb,
 } from '../core/types';
-import type { Session } from '../ui/contract';
+import type { LoadedMap, Session } from '../ui/contract';
 import { baseOf, type EditRefusal } from './commands';
 import { History } from './history';
 import type { CandidateSplitFocus } from './candidate-split-focus';
@@ -133,6 +134,13 @@ export interface AppState {
   /** Drawing tool to return to after the ink picker (prototype prevTool). */
   readonly prevTool: Tool;
   readonly selectedFeatureId: FeatureId | null;
+  /** Transient rectangle selection; never persisted in the project. */
+  readonly selectedTrailIds?: readonly FeatureId[];
+  readonly boxSelectMode?: boolean;
+  readonly boxJoinPreview?: {
+    readonly project: Project;
+    readonly proposal: AutoJoinProposal;
+  } | null;
   readonly selectedAnchorId: AnchorId | null;
   /** A second trail shift-clicked to arm "Join trails" (T-209), or null. */
   readonly secondSelectedFeatureId: FeatureId | null;
@@ -207,6 +215,8 @@ export interface AppState {
   /** Editor-only Esri reference imagery; never part of Project/history. */
   readonly editorBackdrop?: 'map' | 'esri';
   readonly editorMapOpacity?: number;
+  /** Transient drag-to-select mode for tiled-map regional auto-trace (T-330). */
+  readonly regionTraceMode?: boolean;
 }
 
 const history = new History();
@@ -226,6 +236,9 @@ const initialState: AppState = {
   tool: 'select',
   prevTool: 'trail',
   selectedFeatureId: null,
+  selectedTrailIds: [],
+  boxSelectMode: false,
+  boxJoinPreview: null,
   selectedAnchorId: null,
   secondSelectedFeatureId: null,
   joinArmed: false,
@@ -257,6 +270,7 @@ const initialState: AppState = {
   connectSession: null,
   editorBackdrop: 'map',
   editorMapOpacity: 0,
+  regionTraceMode: false,
 };
 
 /** The one app store. */
@@ -270,6 +284,9 @@ export function openSession(session: Session): void {
   appStore.setState({
     session,
     selectedFeatureId: null,
+    selectedTrailIds: [],
+    boxSelectMode: false,
+    boxJoinPreview: null,
     selectedAnchorId: null,
     secondSelectedFeatureId: null,
     joinArmed: false,
@@ -290,8 +307,17 @@ export function openSession(session: Session): void {
     lastInk: null,
     simplifyPreview: null,
     refinePreview: null,
+    regionTraceMode: false,
     history: historyStatus(),
   });
+}
+
+/** Replace only the loaded map when the caller's expected map is still current. */
+export function replaceMap(expectedMap: LoadedMap, nextMap: LoadedMap): boolean {
+  const session = appStore.getState().session;
+  if (!session || session.map !== expectedMap) return false;
+  appStore.setState({ session: { ...session, map: nextMap } });
+  return true;
 }
 
 /**
@@ -323,6 +349,10 @@ function commitProject(project: Project, extra: Partial<AppState> = {}): void {
     ...extra,
     session: { ...s.session, project },
     selectedFeatureId: resolvedFeatureId,
+    selectedTrailIds: (s.selectedTrailIds ?? []).filter((id) =>
+      project.features.some((f) => f.id === id && f.kind === 'trail'),
+    ),
+    boxJoinPreview: null,
     selectedAnchorId: project.anchors.some((a) => a.id === selectedAnchorId)
       ? selectedAnchorId
       : null,
@@ -355,10 +385,20 @@ export function edit(
   if (base && base !== session.project) {
     throw new Error(`Stale command "${cmd.label}": build it from the current project`);
   }
+  const prevProject = session.project;
+  const nextProject = history.execute(session.project, cmd);
+  const hadRouteCleared = prevProject.features.some((beforeFeature) => {
+    if (beforeFeature.kind !== 'trail' || !beforeFeature.route) return false;
+    const afterFeature = nextProject.features.find((f) => f.id === beforeFeature.id);
+    return afterFeature && afterFeature.kind === 'trail' && !afterFeature.route;
+  });
   const extra: Partial<AppState> = {};
   if (select.feature !== undefined) Object.assign(extra, { selectedFeatureId: select.feature });
   if (select.anchor !== undefined) Object.assign(extra, { selectedAnchorId: select.anchor });
-  commitProject(history.execute(session.project, cmd), extra);
+  commitProject(nextProject, extra);
+  if (hadRouteCleared && cmd.label !== 'Clear route classification') {
+    showToast('Route cleared: relabelling needed');
+  }
   return true;
 }
 
@@ -415,11 +455,45 @@ export function setTool(tool: Tool): void {
   appStore.setState({
     ...(draws ? { prevTool: tool } : {}),
     tool,
+    boxSelectMode: false,
+    boxJoinPreview: null,
   });
 }
 
 export function setConnectSession(connectSession: ConnectSession | null): void {
   appStore.setState({ connectSession });
+}
+
+export function setRegionTraceMode(regionTraceMode: boolean): void {
+  appStore.setState({ regionTraceMode, boxSelectMode: false });
+}
+
+export function setBoxSelectMode(boxSelectMode: boolean): void {
+  appStore.setState({
+    boxSelectMode,
+    regionTraceMode: false,
+    boxJoinPreview: null,
+    tool: 'select',
+  });
+}
+
+export function selectTrails(ids: readonly FeatureId[]): void {
+  const features = appStore.getState().session?.project.features ?? [];
+  const selectedTrailIds = [...new Set(ids)]
+    .filter((id) => features.some((f) => f.id === id && f.kind === 'trail'))
+    .sort();
+  appStore.setState({
+    selectedTrailIds,
+    selectedFeatureId: null,
+    secondSelectedFeatureId: null,
+    selectedAnchorId: null,
+    vertexFocus: null,
+    vertexMenu: null,
+    boxJoinPreview: null,
+    simplifyPreview: null,
+    refinePreview: null,
+    joinArmed: false,
+  });
 }
 
 let focusSeq = 0;
@@ -434,6 +508,8 @@ export function requestFocus(target: FocusRequest['target'], id: string): void {
 export function selectFeature(id: FeatureId | null): void {
   appStore.setState({
     selectedFeatureId: id,
+    selectedTrailIds: [],
+    boxJoinPreview: null,
     secondSelectedFeatureId: null,
     joinArmed: false,
     vertexMenu: null,

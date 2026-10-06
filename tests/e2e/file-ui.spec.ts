@@ -232,7 +232,7 @@ test.describe('T-304 File UI and Open Routing', () => {
 
       bridge.openSession({
         project: {
-          version: 2,
+          version: 4,
           name: 'Existing Park Map',
           image: map.meta,
           anchors: [
@@ -282,7 +282,7 @@ test.describe('T-304 File UI and Open Routing', () => {
 
       bridge.openSession({
         project: {
-          version: 2,
+          version: 4,
           name: 'Multi-page Park Map',
           image: map.meta,
           anchors: [],

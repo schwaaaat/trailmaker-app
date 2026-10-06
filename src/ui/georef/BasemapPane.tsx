@@ -11,6 +11,8 @@ import React, {
 void React;
 import type { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
 import type { LatLon, Px } from '../../core/types';
+import type { Session } from '../contract';
+import { forward as mapPxToLatLon } from '../../core/geo/fit';
 import {
   loadSettings,
   subscribeSettings,
@@ -21,6 +23,7 @@ import {
   type AppSettings,
 } from '../../io/settings';
 import { setAnchorCoords } from '../../state/commands';
+import { sessionBridge } from '../../state/bridge';
 import { useApp, useFit } from '../../state/hooks';
 import {
   appStore,
@@ -36,6 +39,8 @@ import { BasemapSettingsPopover } from './BasemapSettingsPopover';
 import { GeoSearchBox } from './GeoSearchBox';
 import { ImagerySwitch } from './ImagerySwitch';
 import { SatelliteFramingOverlay } from './SatelliteFramingOverlay';
+import { MaximumDetailPanel } from './MaximumDetailPanel';
+import { locationToMapOverlay, type DeviceLocationFix } from './location-overlay';
 import { getEffectiveStyle, getSatelliteHost } from './satellite';
 import {
   clearActiveGpx,
@@ -78,6 +83,11 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
   const [mapError, setMapError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [hoverPx, setHoverPx] = useState<Px | null>(null);
+  const [editorDetailFocus, setEditorDetailFocus] = useState<{
+    readonly location: LatLon;
+    readonly scale: number;
+  } | null>(null);
+  const [deviceLocationFix, setDeviceLocationFix] = useState<DeviceLocationFix | null>(null);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
@@ -91,6 +101,7 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
 
   const fit = useFit();
   const project = appState.session?.project;
+  const activeSession: Session | null = sessionBridge.getSession();
   const imageDimensions = project?.image
     ? { width: project.image.width, height: project.image.height }
     : undefined;
@@ -105,6 +116,10 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
   const fitRef = useRef(fit);
   fitRef.current = fit;
 
+  const deviceLocationFixRef = useRef<DeviceLocationFix | null>(deviceLocationFix);
+  deviceLocationFixRef.current = deviceLocationFix;
+  const editorSyncRef = useRef<() => void>(() => {});
+
   const imageDimensionsRef = useRef(imageDimensions);
   imageDimensionsRef.current = imageDimensions;
 
@@ -113,6 +128,12 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
 
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  const handleDeviceLocationFix = useCallback((fix: DeviceLocationFix | null) => {
+    deviceLocationFixRef.current = fix;
+    setDeviceLocationFix(fix);
+    editorSyncRef.current();
+  }, []);
 
   const [gpxLayer, setGpxLayer] = useState<StoredGpxLayer | null>(getActiveGpx);
   const [isGpxListOpen, setIsGpxListOpen] = useState(false);
@@ -270,9 +291,7 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
             });
           }
           const containerRect = containerRef.current?.getBoundingClientRect();
-          const pt = containerRect
-            ? { x: e.point.x, y: e.point.y }
-            : { x: 0, y: 0 };
+          const pt = containerRect ? { x: e.point.x, y: e.point.y } : { x: 0, y: 0 };
           onMapClickRef.current?.(latLon, pt);
         });
 
@@ -417,6 +436,48 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
       crosshair.destroy();
     };
   }, [isReady]);
+
+  useEffect(() => {
+    let unsubscribeView: (() => void) | undefined;
+    const unsubscribeEditor = onEditor((editor) => {
+      unsubscribeView?.();
+      unsubscribeView = undefined;
+      if (!editor) {
+        setEditorDetailFocus(null);
+        editorSyncRef.current = () => {};
+        return;
+      }
+
+      const syncEditorOverlay = () => {
+        const currentFit = fitRef.current;
+        if (!currentFit?.ok) {
+          setEditorDetailFocus(null);
+          editor.setLocationOverlay(null);
+          return;
+        }
+        const detailFocus = editor.detailFocus;
+        setEditorDetailFocus({
+          location: mapPxToLatLon(currentFit, detailFocus.center),
+          scale: detailFocus.scale,
+        });
+        const fix = deviceLocationFixRef.current;
+        editor.setLocationOverlay(fix ? locationToMapOverlay(currentFit, fix) : null);
+      };
+
+      editorSyncRef.current = syncEditorOverlay;
+      syncEditorOverlay();
+      unsubscribeView = editor.on('view', syncEditorOverlay);
+    });
+    return () => {
+      unsubscribeView?.();
+      unsubscribeEditor();
+      editorSyncRef.current = () => {};
+    };
+  }, []);
+
+  useEffect(() => {
+    editorSyncRef.current();
+  }, [deviceLocationFix, fit, imageDimensions?.height, imageDimensions?.width]);
 
   // Initialize and tear down MapLibre instance based on isEnabled
   useEffect(() => {
@@ -691,18 +752,16 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         />
       )}
 
-      {isEnabled && settings.basemap.imagery === 'satellite' && settings.basemap.satelliteProvider === 'naip' && (
-        <div className="trailmaker-naip-coverage-status" role="status">
-          NAIP shown where available; USGS imagery fills areas with no NAIP.
-        </div>
-      )}
+      {isEnabled &&
+        settings.basemap.imagery === 'satellite' &&
+        settings.basemap.satelliteProvider === 'naip' && (
+          <div className="trailmaker-naip-coverage-status" role="status">
+            NAIP shown where available; USGS imagery fills areas with no NAIP.
+          </div>
+        )}
 
       {isPending && (
-        <div
-          className="trailmaker-georef-prompt-banner"
-          role="status"
-          aria-live="polite"
-        >
+        <div className="trailmaker-georef-prompt-banner" role="status" aria-live="polite">
           {PAIRING_PROMPT}
         </div>
       )}
@@ -749,11 +808,7 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
       )}
 
       {mapError && (
-        <div
-          className="trailmaker-basemap-error-banner"
-          role="status"
-          aria-live="polite"
-        >
+        <div className="trailmaker-basemap-error-banner" role="status" aria-live="polite">
           <span>{mapError}</span>
           <button type="button" onClick={() => setMapError(null)} aria-label="Dismiss error">
             ×
@@ -918,6 +973,17 @@ const BasemapPaneComponent: ForwardRefRenderFunction<BasemapHandle, BasemapPaneP
         activeProvider={settings.basemap.satelliteProvider ?? 'naip'}
         onSwitchProvider={(satelliteProvider) => updateBasemapSettings({ satelliteProvider })}
       />
+
+      <div className="trailmaker-max-detail-runtime">
+        <MaximumDetailPanel
+          map={mapInstanceRef.current}
+          isOpen={Boolean(activeSession)}
+          session={activeSession}
+          editorFocus={editorDetailFocus}
+          onLocationFix={handleDeviceLocationFix}
+          compact
+        />
+      </div>
 
       {children}
     </div>

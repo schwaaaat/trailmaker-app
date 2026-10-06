@@ -291,7 +291,7 @@ describe('T-305 IndexedDB autosave (with fake-indexeddb)', () => {
 
     const restored = await readAutosave();
     expect(restored).not.toBeNull();
-    expect(restored?.project.version).toBe(2);
+    expect(restored?.project.version).toBe(4);
     expect(restored?.project.name).toBe('Old Schema Park (migrated)');
   });
 
@@ -380,7 +380,7 @@ describe('T-305 IndexedDB autosave (with fake-indexeddb)', () => {
     stopAutosave();
   });
 
-  it('migrates v1 autosave to version 2 upon reading', async () => {
+  it('migrates v1 autosave to version 4 upon reading', async () => {
     const db = await getDb();
     const v1Proj = { ...makeProject({ name: 'V1 Autosaved Park' }), version: 1 };
     await db.put(STORE_NAME, JSON.stringify(v1Proj), 'project');
@@ -388,18 +388,18 @@ describe('T-305 IndexedDB autosave (with fake-indexeddb)', () => {
 
     const restored = await readAutosave();
     expect(restored).not.toBeNull();
-    expect(restored?.project.version).toBe(2);
+    expect(restored?.project.version).toBe(4);
     expect(restored?.project.name).toBe('V1 Autosaved Park');
   });
 
-  it('saving an opened v1 project writes version 2 into IndexedDB autosave', async () => {
+  it('saving an opened v1 project writes version 4 into IndexedDB autosave', async () => {
     const db = await getDb();
     const v1Proj = { ...makeProject({ name: 'V1 Resave Park' }), version: 1 };
     await db.put(STORE_NAME, JSON.stringify(v1Proj), 'project');
     await db.put(STORE_NAME, new Blob(['bytes'], { type: 'image/png' }), 'image');
 
     const restored = await readAutosave();
-    expect(restored?.project.version).toBe(2);
+    expect(restored?.project.version).toBe(4);
 
     const { bridge, setSession } = createFakeBridge();
     const stop = startAutosave(bridge);
@@ -408,7 +408,7 @@ describe('T-305 IndexedDB autosave (with fake-indexeddb)', () => {
     await flushAsyncWork(850);
 
     const savedProject = await db.get(STORE_NAME, 'project');
-    expect(savedProject.version).toBe(2);
+    expect(savedProject.version).toBe(4);
     expect(savedProject.name).toBe('V1 Resave Park');
 
     stop();
@@ -468,4 +468,3 @@ describe('T-305 IndexedDB autosave (with fake-indexeddb)', () => {
     stop();
   });
 });
-

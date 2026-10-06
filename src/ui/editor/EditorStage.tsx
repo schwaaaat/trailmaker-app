@@ -7,12 +7,26 @@ import { useApp, useFit } from '../../state/hooks';
 import { setEditorBackdrop, setEditorMapOpacity } from '../../state/store';
 import { loadSettings, subscribeSettings } from '../../io/settings';
 import { Editor } from './Editor';
-import { idle, installSmartFollow } from './smart';
+import { idle, installSmartFollow, tiledToolMetrics } from './smart';
 import { Tools } from './tools';
 import { VertexMenu } from './VertexMenu';
 
 let current: Editor | null = null;
 const subscribers = new Set<(editor: Editor | null) => void>();
+type TiledTestWindow = Window & {
+  __trailmakerTiled?: () => {
+    readonly bytes: number;
+    readonly byteLimit: number;
+    readonly patchReadMs: number;
+    readonly patchLoadMs: number;
+    readonly smartHopMs: number;
+  } | null;
+};
+
+if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+  (window as TiledTestWindow).__trailmakerTiled = () =>
+    current ? { ...current.tileCacheStats, ...tiledToolMetrics } : null;
+}
 
 /** The mounted editor, or null. Tools (T-204) attach to it via onEditor. */
 export function currentEditor(): Editor | null {

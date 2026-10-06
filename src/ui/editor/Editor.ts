@@ -8,7 +8,7 @@ import { appStore, selectFit, type AppState, type Draft, type Tool } from '../..
 import { hitAnchor, hitHandle } from './hit';
 import { LongPressRecognizer, LONG_PRESS_TOLERANCE_PX } from './long-press';
 import { LineLayer } from './layer';
-import { renderFrame, type RenderModel } from './render';
+import { renderFrame, type EditorLocationOverlay, type RenderModel } from './render';
 import {
   centerOn,
   fitView,
@@ -21,6 +21,7 @@ import {
   type View,
 } from './view';
 import { inverse } from '../../core/geo/fit';
+import type { LoadedMap, TileLevel } from '../contract';
 import { loadSettings, subscribeSettings } from '../../io/settings';
 import { SATELLITE_PROVIDERS } from '../georef/satellite';
 import {
@@ -32,6 +33,14 @@ import {
   TileLru,
   type EsriTile,
 } from '../georef/esriBackdrop';
+import {
+  ByteLru,
+  tileBitmapBytes,
+  tileCacheLimit,
+  tileLevelForView,
+  tilesForChangedRegion,
+  tilesForRegion,
+} from './tiled-map';
 
 /** Zoom idle time (ms) before the line layer is re-rasterized at the new scale. */
 export const ZOOM_SETTLE_MS = 150;
@@ -71,7 +80,8 @@ export interface HopProvider {
 /** Something a drag moves. */
 export type DragTarget =
   | { readonly kind: 'anchor'; readonly id: AnchorId }
-  | { readonly kind: 'vertex'; readonly featureId: FeatureId; readonly index: number };
+  | { readonly kind: 'vertex'; readonly featureId: FeatureId; readonly index: number }
+  | { readonly kind: 'region'; readonly start: Px; readonly purpose?: 'trace' | 'select' };
 
 /** Where a pointer event happened. */
 export interface PointerAt {
@@ -151,11 +161,19 @@ export class Editor {
   /** CPU time of the last renderNow call, ms (excludes GPU rasterization). */
   lastFrameMs = 0;
   private readonly esriTiles = new TileLru<ImageBitmap>(256);
+  private tiledTiles = new ByteLru<ImageBitmap>(256 * 1024 * 1024, (bitmap) => bitmap.close());
+  private readonly pendingTiles = new Map<string, object>();
+  private readonly missingTiles = new Set<string>();
+  private detailMap: LoadedMap | null = null;
+  private unsubscribeDetailChanged: (() => void) | null = null;
+  private locationOverlay: EditorLocationOverlay | null = null;
   private readonly pendingEsri = new Map<string, HTMLImageElement>();
   private esriApiKey: string | undefined;
   private hops: HopProvider | null = null;
   /** Set after a right-button drag, so the contextmenu that follows it on release is swallowed. */
   private swallowContextMenu = false;
+  private regionSelection: { readonly from: Px; readonly to: Px } | null = null;
+  private destroyed = false;
 
   /** Install (or clear) the hop provider used by trail/area drafting (T-206). */
   setHopProvider(fn: HopProvider | null): void {
@@ -220,17 +238,25 @@ export class Editor {
       this.cleanups.push(() => ro.disconnect());
     }
     this.cleanups.push(this.store.subscribe((s, prev) => this.onState(s, prev)));
+    this.watchMapDetails(this.store.getState().session?.map ?? null);
     this.updateCursorStyle();
     this.resize();
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.longPress.cancel();
+    this.unsubscribeDetailChanged?.();
+    this.unsubscribeDetailChanged = null;
+    this.detailMap = null;
     for (const off of this.cleanups.splice(0)) off();
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.settleTimer = null;
     this.lines.reset();
+    this.tiledTiles.clear();
+    this.pendingTiles.clear();
+    this.missingTiles.clear();
     this.raf = 0;
     this.canvas = null;
     this.ctx = null;
@@ -262,6 +288,28 @@ export class Editor {
   /** Canvas size in CSS pixels. */
   get size(): { width: number; height: number } {
     return { width: this.cw, height: this.ch };
+  }
+
+  get tileCacheStats(): { readonly bytes: number; readonly byteLimit: number } {
+    return { bytes: this.tiledTiles.bytes, byteLimit: this.tiledTiles.byteLimit };
+  }
+
+  /** Full-resolution map bounds currently visible in the editor, clipped to the image. */
+  get visibleMapRegion(): { x: number; y: number; width: number; height: number } | null {
+    const map = this.store.getState().session?.map;
+    if (!map) return null;
+    const corners = [
+      toImg(this.v, [0, 0]),
+      toImg(this.v, [this.cw, 0]),
+      toImg(this.v, [this.cw, this.ch]),
+      toImg(this.v, [0, this.ch]),
+    ];
+    const x = Math.max(0, Math.min(...corners.map(([px]) => px)));
+    const y = Math.max(0, Math.min(...corners.map(([, py]) => py)));
+    const right = Math.min(map.meta.width, Math.max(...corners.map(([px]) => px)));
+    const bottom = Math.min(map.meta.height, Math.max(...corners.map(([, py]) => py)));
+    if (right <= x || bottom <= y) return null;
+    return { x, y, width: right - x, height: bottom - y };
   }
 
   /** The mounted canvas element, or null (T-215: gate Tab/arrow handling to canvas-focused). */
@@ -309,6 +357,17 @@ export class Editor {
     return this.at([this.cw / 2, this.ch / 2]);
   }
 
+  /** Current level-0 image-space center and scale for the maximum-detail focus controller. */
+  get detailFocus(): { readonly center: Px; readonly scale: number } {
+    return { center: this.centerPointerAt().px, scale: this.v.s };
+  }
+
+  /** Set the local-only GPS overlay already projected into level-0 map pixels. */
+  setLocationOverlay(overlay: EditorLocationOverlay | null): void {
+    this.locationOverlay = overlay;
+    this.invalidate();
+  }
+
   /** Image pixel -> CSS client coordinates (TestHook.imageToClient). */
   imageToClient(px: Px): { x: number; y: number } {
     if (!this.canvas) throw new Error('Editor is not mounted');
@@ -330,6 +389,11 @@ export class Editor {
     this.dpr = window.devicePixelRatio || 1;
     this.cw = r.width;
     this.ch = r.height;
+    const tileLimit = tileCacheLimit(r.width);
+    if (this.tiledTiles.byteLimit !== tileLimit) {
+      this.tiledTiles.clear();
+      this.tiledTiles = new ByteLru<ImageBitmap>(tileLimit, (bitmap) => bitmap.close());
+    }
     c.width = Math.max(1, Math.round(r.width * this.dpr));
     c.height = Math.max(1, Math.round(r.height * this.dpr));
     if (this.needsFit) this.fitView();
@@ -345,6 +409,11 @@ export class Editor {
       this.lines.reset();
       this.needsFit = true;
       this.fitView();
+      this.tiledTiles.clear();
+      this.pendingTiles.clear();
+      this.missingTiles.clear();
+      this.locationOverlay = null;
+      this.watchMapDetails(s.session?.map ?? null);
     }
     if (s.tool !== prev.tool) this.updateCursorStyle();
     if (
@@ -352,6 +421,7 @@ export class Editor {
       s.selectedFeatureId !== prev.selectedFeatureId ||
       s.selectedAnchorId !== prev.selectedAnchorId ||
       s.secondSelectedFeatureId !== prev.secondSelectedFeatureId ||
+      s.selectedTrailIds !== prev.selectedTrailIds ||
       s.draft !== prev.draft ||
       s.candidates !== prev.candidates ||
       s.candidateSplitFocus !== prev.candidateSplitFocus ||
@@ -363,10 +433,45 @@ export class Editor {
       s.keyboardMode !== prev.keyboardMode ||
       s.editorBackdrop !== prev.editorBackdrop ||
       s.editorMapOpacity !== prev.editorMapOpacity ||
+      s.regionTraceMode !== prev.regionTraceMode ||
       s.tool !== prev.tool
     ) {
       this.invalidate();
     }
+    if (s.regionTraceMode !== prev.regionTraceMode || s.boxSelectMode !== prev.boxSelectMode) {
+      this.updateCursorStyle();
+      this.invalidate();
+    }
+  }
+
+  private watchMapDetails(map: LoadedMap | null): void {
+    if (this.detailMap === map) return;
+    this.unsubscribeDetailChanged?.();
+    this.unsubscribeDetailChanged = null;
+    this.detailMap = map;
+    const tiles = map?.tiles;
+    if (!map || !tiles?.subscribeDetailChanged) return;
+    this.unsubscribeDetailChanged = tiles.subscribeDetailChanged((rect) => {
+      if (this.destroyed || this.detailMap !== map || this.store.getState().session?.map !== map) {
+        return;
+      }
+      const detailLevel = tiles.levels.find((level) => level.level === -1);
+      if (!detailLevel || tiles.tileSize <= 0) return;
+      const changed = tilesForChangedRegion(detailLevel, tiles.tileSize, rect);
+      for (const { col, row } of changed) {
+        const key = `-1/${col}/${row}`;
+        this.tiledTiles.delete(key);
+        this.missingTiles.delete(key);
+        // Retire only this request. A late result cannot affect a replacement lookup for the key.
+        this.pendingTiles.delete(key);
+      }
+      if (changed.length) this.invalidate();
+    });
+  }
+
+  setRegionSelection(selection: { readonly from: Px; readonly to: Px } | null): void {
+    this.regionSelection = selection;
+    this.invalidate();
   }
 
   /** Schedule one render on the next animation frame (coalesces repeated calls). */
@@ -396,6 +501,10 @@ export class Editor {
         this.lines.draw(ctx, this.v, this.dpr, this.cw, this.ch, content, zoomSettled, panSettled),
       (ctx) => this.drawEsri(ctx),
       s.editorBackdrop === 'esri' ? (s.editorMapOpacity ?? 0) : 1,
+      (ctx) => {
+        const map = s.session?.map;
+        if (map?.tiles) this.drawTiledMap(ctx, map);
+      },
     );
     // Mid-zoom the layer is shown scaled, and a fast/long drag can leave it uncovered past the
     // margin; re-rasterize once whichever gesture has settled.
@@ -411,6 +520,84 @@ export class Editor {
       );
     }
     this.lastFrameMs = performance.now() - t0;
+  }
+
+  private drawTiledMap(ctx: CanvasRenderingContext2D, map: LoadedMap): void {
+    const tiles = map.tiles;
+    if (!tiles || this.v.s * this.dpr <= tiles.overviewScale) return;
+    const levelNumber = tileLevelForView(tiles.levels, this.v.s, this.dpr);
+    const level = tiles.levels.find((entry) => entry.level === levelNumber);
+    if (!level || tiles.tileSize <= 0) return;
+    const corners = [
+      toImg(this.v, [0, 0]),
+      toImg(this.v, [this.cw, 0]),
+      toImg(this.v, [this.cw, this.ch]),
+      toImg(this.v, [0, this.ch]),
+    ];
+    const minX = Math.max(0, Math.min(...corners.map(([x]) => x)));
+    const minY = Math.max(0, Math.min(...corners.map(([, y]) => y)));
+    const maxX = Math.min(map.meta.width, Math.max(...corners.map(([x]) => x)));
+    const maxY = Math.min(map.meta.height, Math.max(...corners.map(([, y]) => y)));
+    const rect = {
+      x: minX,
+      y: minY,
+      width: Math.max(0, maxX - minX),
+      height: Math.max(0, maxY - minY),
+    };
+    const drawLevels: readonly TileLevel[] =
+      level.level < 0
+        ? [tiles.levels.find((entry) => entry.level === 0), level].filter(
+            (entry): entry is TileLevel => entry !== undefined,
+          )
+        : [level];
+    for (const drawLevel of drawLevels) {
+      const decimation = 2 ** drawLevel.level;
+      for (const tile of tilesForRegion(drawLevel, tiles.tileSize, rect)) {
+        const key = `${drawLevel.level}/${tile.col}/${tile.row}`;
+        const bitmap = this.tiledTiles.get(key);
+        if (bitmap) {
+          ctx.save();
+          ctx.imageSmoothingEnabled = this.v.s * decimation < 1.6;
+          ctx.drawImage(
+            bitmap,
+            tile.col * tiles.tileSize * decimation,
+            tile.row * tiles.tileSize * decimation,
+            bitmap.width * decimation,
+            bitmap.height * decimation,
+          );
+          ctx.restore();
+        } else if (!this.pendingTiles.has(key) && !this.missingTiles.has(key)) {
+          const request = {};
+          this.pendingTiles.set(key, request);
+          const isCurrent = () => this.pendingTiles.get(key) === request;
+          const fallback = () => {
+            if (!isCurrent()) return;
+            this.pendingTiles.delete(key);
+            // Keep the coarser level visible instead of retrying an unavailable tile each frame.
+            this.missingTiles.add(key);
+          };
+          void tiles
+            .getTileBitmap(drawLevel.level, tile.col, tile.row)
+            .then(async (sourceBitmap) => {
+              if (!isCurrent()) return;
+              if (sourceBitmap && !this.destroyed && this.store.getState().session?.map === map) {
+                // T-329's handle may return a shared cached bitmap; clone before this LRU owns it.
+                const loaded = await createImageBitmap(sourceBitmap);
+                if (!isCurrent() || this.destroyed || this.store.getState().session?.map !== map) {
+                  loaded.close();
+                  return;
+                }
+                this.pendingTiles.delete(key);
+                this.tiledTiles.set(key, loaded, tileBitmapBytes(loaded));
+                this.invalidate();
+              } else {
+                fallback();
+              }
+            }, fallback)
+            .catch(fallback);
+        }
+      }
+    }
   }
 
   private drawEsri(ctx: CanvasRenderingContext2D): void {
@@ -556,12 +743,20 @@ export class Editor {
     const s = this.store.getState();
     const p = s.session?.project;
     const fit = selectFit(s);
+    const map = s.session?.map;
     const placementTool = s.tool === 'anchor' || s.tool === 'point';
     return {
-      image: s.session?.map.display ?? null,
+      image: map?.display ?? null,
+      ...(map?.tiles
+        ? {
+            imageSize: { width: map.meta.width, height: map.meta.height },
+            imagePixelScale: map.tiles.overviewScale,
+          }
+        : {}),
       features: p?.features ?? [],
       selectedFeatureId: s.selectedFeatureId,
       secondSelectedFeatureId: s.secondSelectedFeatureId,
+      selectedTrailIds: s.selectedTrailIds ?? [],
       draft: s.draft,
       cursor: this.cursor,
       candidates: s.candidates,
@@ -570,10 +765,12 @@ export class Editor {
       selectedAnchorId: s.selectedAnchorId,
       isOutlier: (id) => (fit?.ok ? anchorOutlier(fit, id) : false),
       focusedVertex: s.vertexFocus,
-      centerCrosshair: s.keyboardMode && placementTool && !s.draft,
+      centerCrosshair: s.keyboardMode && (placementTool || !!s.boxSelectMode) && !s.draft,
       simplifyPreview: s.simplifyPreview ?? null,
       refinePreview: s.refinePreview ?? null,
       connectPreview: s.connectSession?.connector ?? null,
+      regionSelection: this.regionSelection,
+      locationOverlay: this.locationOverlay,
     };
   }
 
@@ -583,7 +780,9 @@ export class Editor {
     this.canvas.style.cursor =
       this.press?.pan && this.press.moved
         ? 'grabbing'
-        : tool === 'select'
+        : tool === 'select' &&
+            !this.store.getState().regionTraceMode &&
+            !this.store.getState().boxSelectMode
           ? 'default'
           : 'crosshair';
   }
@@ -613,6 +812,8 @@ export class Editor {
 
   private targetAt(s: Screen): DragTarget | null {
     const st = this.store.getState();
+    if (st.regionTraceMode) return { kind: 'region', start: this.at(s, true).px };
+    if (st.boxSelectMode) return { kind: 'region', start: this.at(s, true).px, purpose: 'select' };
     const p = st.session?.project;
     if (!p) return null;
     if (st.tool === 'select' || st.tool === 'anchor') {

@@ -188,6 +188,18 @@ describe('splitTrail', () => {
   it.each([-1, 0, 3, 4])('rejects invalid split vertex %i', (index) => {
     expect(() => splitTrail(trail('a', [[0, 0], [1, 0], [2, 0], [3, 0]]), index, 'b')).toThrow(RangeError);
   });
+
+  it('clears route metadata on both split results (T-334)', () => {
+    const source: Trail = {
+      ...trail('a', [[0, 0], [5, 0], [10, 1], [15, 1]]),
+      route: { kind: 'one-way' },
+    };
+    const edit = splitTrail(source, 2, 'b');
+    const first = edit.updated[0] as Trail;
+    const second = edit.updated[1] as Trail;
+    expect(first.route).toBeUndefined();
+    expect(second.route).toBeUndefined();
+  });
 });
 
 describe('joinTrails', () => {
@@ -197,6 +209,20 @@ describe('joinTrails', () => {
     expect(joinTrails(a, b)).toEqual({
       updated: [{ ...a, pts: [[0, 0], [10, 0], [20, 0]] }], removed: ['b'],
     });
+  });
+
+  it('clears route metadata on joined trail (T-334)', () => {
+    const a: Trail = {
+      ...trail('a', [[0, 0], [10, 0]], { name: 'Main', ink: null }),
+      route: { kind: 'one-way' },
+    };
+    const b: Trail = {
+      ...trail('b', [[20, 0], [10.2, 0]]),
+      route: { kind: 'one-way' },
+    };
+    const result = joinTrails(a, b);
+    const joined = result.updated[0] as Trail;
+    expect(joined.route).toBeUndefined();
   });
 
   it('keeps a connector when ends are farther than 0.5 px and reverses a if needed', () => {

@@ -5,7 +5,7 @@ import type { MapImage, Project, Px, RasterImage } from '../core/types';
 
 /** A map opened in the browser, ready to display and trace. Produced by src/io loaders. */
 export interface LoadedMap {
-  /** Metadata; meta.width/height match display and raster. */
+  /** Metadata; for tiled maps, meta.width/height are the virtual level-0 size. */
   readonly meta: MapImage;
   /** Working-resolution bitmap for the canvas editor. */
   readonly display: ImageBitmap;
@@ -49,6 +49,13 @@ export interface SessionBridge {
   subscribe(listener: (session: Session | null) => void): () => void;
   /** Replace the whole session (open file, restore autosave, open project). Clears undo history. */
   openSession(session: Session): void;
+  /**
+   * Replace only the loaded pixels for the current map (for example after offline tiles are
+   * re-downloaded or deleted). Keep the latest Project object and its undo/redo history.
+   * Return false if the user has opened a different map since the operation began.
+   * Optional until the Lane B bridge implementation lands.
+   */
+  replaceMap?(expectedMap: LoadedMap, nextMap: LoadedMap): boolean;
 }
 
 /**
@@ -71,7 +78,7 @@ declare global {
   }
 }
 
-/** One resolution level of a tiled map. Level 0 is full resolution; level n is downsampled by 2^n. */
+/** One resolution level of a tiled map. Level 0 is the base tile resolution; level -1 is 2× finer where present, and positive levels are downsampled by 2^level. */
 export interface TileLevel {
   readonly level: number;
   /** Level size in pixels. */
@@ -82,22 +89,34 @@ export interface TileLevel {
   readonly rows: number;
 }
 
+/** A tiled region read. At level -1, detailCoverage marks pixels backed by stored detail. */
+export interface TiledRegionRaster extends RasterImage {
+  /** One byte per output pixel: 255 for real level -1 detail, 0 for level-0 fallback. Present for level -1 reads. */
+  readonly detailCoverage?: Uint8Array;
+}
+
 /** Access to a tiled map's stored pixels (D-039). Produced by Lane C, rendered and traced by Lane B. */
 export interface TiledMapHandle {
-  /** Available levels, finest first (levels[0].level === 0). */
+  /** Available levels, finest first. Level 0 is always present; optional level -1 may have partial coverage. */
   readonly levels: readonly TileLevel[];
   /** Tile edge in pixels. */
   readonly tileSize: number;
   /** display.width / meta.width (the overview's scale relative to full resolution). */
   readonly overviewScale: number;
-  /** Decoded tile at a level and grid position, or null when it is missing (e.g. a failed download). */
+  /** Decoded tile at a level and grid position, or null when missing. Level -1 returns null outside stored detail coverage. */
   getTileBitmap(level: number, col: number, row: number): Promise<ImageBitmap | null>;
   /**
-   * RGBA pixels of a rectangle given in full-resolution Px, read from `level` (the result is the
-   * rectangle's size divided by 2^level). Missing tiles read as transparent.
+   * RGBA pixels of a rectangle given in level-0 Px, read from `level` (the result is the
+   * rectangle's size divided by 2^level). At level -1, missing detail falls back to upsampled
+   * level 0 and detailCoverage identifies the pixels with actual detail. At other levels, missing
+   * tiles read as transparent.
    */
   readRegion(
     rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
     level: number,
-  ): Promise<RasterImage>;
+  ): Promise<TiledRegionRaster>;
+  /** Subscribe to stored or deleted level -1 detail. The changed rectangle is in level-0 Px. */
+  subscribeDetailChanged?(
+    listener: (rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }) => void,
+  ): () => void;
 }

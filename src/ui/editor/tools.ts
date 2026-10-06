@@ -20,6 +20,7 @@ import {
 } from '../../state/commands';
 import {
   appStore,
+  announce,
   checkpointHistory,
   edit,
   openVertexMenu,
@@ -36,6 +37,8 @@ import {
   setHelpOpen,
   setJoinArmed,
   setKeyboardMode,
+  setRegionTraceMode,
+  setBoxSelectMode,
   setConnectSession,
   setTool,
   setVertexFocus,
@@ -46,9 +49,18 @@ import {
   type HistoryCheckpoint,
   type Tool,
 } from '../../state/store';
-import { canSplitAt, joinSelected, splitHere } from '../../state/topology-actions';
+import {
+  canSplitAt,
+  joinSelected,
+  splitHere,
+  selectTrailsInRect,
+  previewAutoJoin,
+  cancelAutoJoin,
+  applyAutoJoin,
+} from '../../state/topology-actions';
 import { moveVertexFocus, stepCount, stepVertexFocus } from '../../state/vertex-focus';
 import { splitReviewedCandidate } from '../panels/candidate-split';
+import { autoTraceRegion } from '../panels/trace-actions';
 import type { DragTarget, Editor, EditorEvents, HopProvider, PointerAt } from './Editor';
 import { isCancelled, isReported } from '../../state/worker-link';
 import { hitCandidate, hitFeature, hitVertex } from './hit';
@@ -556,6 +568,8 @@ export class Tools {
   } | null = null;
   /** Last known pointer position on the canvas, for the S (split here) shortcut. */
   private hoverScreen: Screen | null = null;
+  private regionStart: Px | null = null;
+  private boxCursor: Px | null = null;
 
   constructor(private readonly editor: Editor) {
     this.offs.push(
@@ -568,6 +582,13 @@ export class Tools {
       // A press on the canvas is mouse (or touch) input: drop keyboard modality so the centre
       // crosshair (T-215) doesn't linger over a pointer-driven session.
       editor.on('pointerdown', () => setKeyboardMode(false)),
+      appStore.subscribe((s, prev) => {
+        if (s.boxSelectMode !== prev.boxSelectMode || s.session?.map !== prev.session?.map) {
+          this.regionStart = null;
+          this.boxCursor = null;
+          editor.setRegionSelection(null);
+        }
+      }),
     );
     const onKey = (e: KeyboardEvent) => this.onKey(e);
     // Capture Escape and tool keys before a focused panel or toolbar button can consume them.
@@ -600,6 +621,18 @@ export class Tools {
   }
 
   private onClick(e: EditorEvents['click']): void {
+    if (e.target?.kind === 'region') {
+      if (e.target.purpose === 'select' && state().boxSelectMode) {
+        if (this.regionStart) this.finishBox(this.regionStart, e.px);
+        else {
+          this.regionStart = e.px;
+          this.boxCursor = e.px;
+          this.editor.setRegionSelection({ from: e.px, to: e.px });
+          showToast('Choose the opposite corner, or drag a rectangle.');
+        }
+      }
+      return;
+    }
     const s = state();
     const p = s.session?.project;
     if (!p) return;
@@ -719,12 +752,57 @@ export class Tools {
     }
   }
 
+  private finishBox(from: Px, to: Px): void {
+    const rect = {
+      x: Math.min(from[0], to[0]),
+      y: Math.min(from[1], to[1]),
+      width: Math.abs(to[0] - from[0]),
+      height: Math.abs(to[1] - from[1]),
+    };
+    this.editor.setRegionSelection(null);
+    this.regionStart = null;
+    this.boxCursor = null;
+    if (rect.width < 2 || rect.height < 2) {
+      showToast('Choose a larger rectangle to select trails.');
+      return;
+    }
+    selectTrailsInRect(rect);
+    setBoxSelectMode(false);
+  }
+
   private onDrag(
     e: PointerAt & { readonly target: DragTarget; readonly cancelled?: boolean },
     phase: 'start' | 'move' | 'end',
   ): void {
     const p = project();
     if (!p) return;
+    if (e.target.kind === 'region') {
+      if (phase === 'start') this.regionStart = e.target.start;
+      const start = this.regionStart ?? e.target.start;
+      if (phase !== 'end') {
+        this.editor.setRegionSelection({ from: start, to: e.px });
+      } else {
+        this.editor.setRegionSelection(null);
+        this.regionStart = null;
+        if (e.target.purpose === 'select') {
+          if (!e.cancelled && state().boxSelectMode) this.finishBox(start, e.px);
+          else setBoxSelectMode(false);
+          return;
+        }
+        setRegionTraceMode(false);
+        if (!e.cancelled) {
+          const rect = {
+            x: Math.min(start[0], e.px[0]),
+            y: Math.min(start[1], e.px[1]),
+            width: Math.abs(e.px[0] - start[0]),
+            height: Math.abs(e.px[1] - start[1]),
+          };
+          if (rect.width >= 2 && rect.height >= 2) void autoTraceRegion(rect);
+          else showToast('Drag a larger rectangle around the trails to trace.');
+        }
+      }
+      return;
+    }
     if (phase === 'end' && e.cancelled) {
       if (this.dragCheckpoint) {
         restoreCancelledDrag(this.dragCheckpoint.project, this.dragCheckpoint.history);
@@ -781,6 +859,115 @@ export class Tools {
 
   private onKey(e: KeyboardEvent): void {
     const s = state();
+    const boxTyping =
+      e.target instanceof HTMLElement &&
+      (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName));
+    if (
+      !s.helpOpen &&
+      !boxTyping &&
+      s.session &&
+      !s.draft &&
+      !s.job &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      if (e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setBoxSelectMode(!s.boxSelectMode);
+        this.editor.element?.focus();
+        setKeyboardMode(true);
+        return;
+      }
+      if (
+        s.boxJoinPreview &&
+        (e.key === 'Escape' || (e.key === 'Enter' && e.target === this.editor.element))
+      ) {
+        e.preventDefault();
+        if (e.key === 'Escape') cancelAutoJoin();
+        else applyAutoJoin();
+        return;
+      }
+      if (
+        !s.boxSelectMode &&
+        s.tool === 'select' &&
+        (s.selectedTrailIds?.length ?? 0) >= 2 &&
+        e.key.toLowerCase() === 'j'
+      ) {
+        e.preventDefault();
+        previewAutoJoin(this.editor.view.s);
+        return;
+      }
+      if (s.boxSelectMode) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setBoxSelectMode(false);
+          return;
+        }
+        if (e.target === this.editor.element && e.key === 'Enter') {
+          e.preventDefault();
+          if (this.regionStart && this.boxCursor) this.finishBox(this.regionStart, this.boxCursor);
+          else {
+            this.regionStart = this.editor.centerPointerAt().px;
+            this.boxCursor = this.regionStart;
+            this.editor.setRegionSelection({ from: this.regionStart, to: this.boxCursor });
+            announce(
+              'First box corner set. Use arrows to size the rectangle, then Enter to select trails.',
+            );
+          }
+          return;
+        }
+        if (
+          e.target === this.editor.element &&
+          this.regionStart &&
+          this.boxCursor &&
+          e.key.startsWith('Arrow')
+        ) {
+          e.preventDefault();
+          const step = (e.shiftKey ? 100 : 20) / this.editor.view.s;
+          const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+          const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+          const p = s.session.project;
+          this.boxCursor = [
+            Math.max(0, Math.min(p.image.width, this.boxCursor[0] + dx)),
+            Math.max(0, Math.min(p.image.height, this.boxCursor[1] + dy)),
+          ];
+          this.editor.setRegionSelection({ from: this.regionStart, to: this.boxCursor });
+          announce(
+            `Box ${Math.round(Math.abs(this.boxCursor[0] - this.regionStart[0]))} by ${Math.round(Math.abs(this.boxCursor[1] - this.regionStart[1]))} map pixels.`,
+          );
+          return;
+        }
+      }
+    }
+    if (s.regionTraceMode && e.key === 'Escape') {
+      e.preventDefault();
+      setRegionTraceMode(false);
+      this.regionStart = null;
+      this.editor.setRegionSelection(null);
+      return;
+    }
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    const typing =
+      target !== null &&
+      (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    if (
+      s.regionTraceMode &&
+      !s.helpOpen &&
+      !typing &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === 'v'
+    ) {
+      e.preventDefault();
+      const region = this.editor.visibleMapRegion;
+      setRegionTraceMode(false);
+      this.regionStart = null;
+      this.editor.setRegionSelection(null);
+      if (region) void autoTraceRegion(region);
+      return;
+    }
     // The help dialog (T-215) traps its own keys (focusTrap.ts, capture phase + stopPropagation);
     // this bubble-phase listener shouldn't also fire a tool shortcut underneath it.
     if (s.helpOpen) return;
@@ -790,7 +977,6 @@ export class Tools {
       openVertexMenu(null);
       return;
     }
-    const target = e.target instanceof HTMLElement ? e.target : null;
     const selected = s.session?.project.features.find((x) => x.id === s.selectedFeatureId);
     const focus = s.vertexFocus;
     const focusedIndex = focus && selected && focus.featureId === selected.id ? focus.index : -1;

@@ -7,13 +7,15 @@ import {
   appStore,
   edit,
   openSession,
+  selectTrails,
   setDraft,
+  setTool,
   splitCandidateInReview,
   setCandidates,
   type ReviewCandidate,
 } from '../../state/store';
 import { settled } from './tools';
-import { Toolbar } from './Toolbar';
+import { Toolbar, TipLine } from './Toolbar';
 
 void React;
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,6 +28,101 @@ function render(node: React.ReactNode) {
 }
 const undoButton = () => host.querySelector<HTMLButtonElement>('button[aria-label="Undo"]')!;
 const project = () => appStore.getState().session!.project;
+
+describe('Box selection toolbar (T-333)', () => {
+  it('keeps selection-only actions out of the toolbar while placing anchors or tracing', () => {
+    openSession(makeSession(makeProject()));
+    render(<Toolbar />);
+    expect(host.querySelector('button[aria-label="Box select trails"]')).not.toBeNull();
+    expect(
+      host.querySelector('[aria-label="Map tools"] button[aria-label="Box select trails"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector(
+        '[aria-label="Trail selection actions"] button[aria-label="Box select trails"]',
+      ),
+    ).not.toBeNull();
+    for (const tool of ['anchor', 'trail', 'point', 'area', 'connect'] as const) {
+      act(() => setTool(tool));
+      expect(host.querySelector('button[aria-label="Box select trails"]')).toBeNull();
+    }
+    act(() => setTool('select'));
+    expect(host.querySelector('button[aria-label="Box select trails"]')).not.toBeNull();
+  });
+
+  it('exposes touch actions, reports the proposed counts, and applies only after confirmation', () => {
+    const trail = (id: string, start: number, end: number) => ({
+      kind: 'trail' as const,
+      id,
+      name: id,
+      color: '#123456',
+      notes: '',
+      ink: null,
+      pts: [
+        [start, 100],
+        [end, 100],
+      ] as const,
+    });
+    const initial = makeProject({
+      features: [
+        trail('a', 0, 100),
+        trail('b', 100, 200),
+        {
+          ...trail('branch', 100, 100),
+          pts: [
+            [100, 100],
+            [100, 200],
+          ],
+        },
+      ],
+    });
+    openSession(makeSession(initial));
+    render(
+      <>
+        <Toolbar />
+        <TipLine />
+      </>,
+    );
+    const button = (label: string) =>
+      host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    act(() => button('Box select trails').click());
+    expect(appStore.getState().boxSelectMode).toBe(true);
+    expect(host.textContent).toContain('tap two corners');
+    act(() => {
+      button('Box select trails').click();
+      selectTrails(['a', 'b']);
+    });
+    act(() => button('Preview auto-join').click());
+    expect(project()).toBe(initial);
+    expect(host.querySelector('[aria-label="Auto-join preview"]')?.textContent).toContain(
+      '1 ambiguous junctions left separate',
+    );
+    expect(
+      host.querySelector('[aria-label="Trails at ambiguous junctions"]')?.textContent,
+    ).toContain('a, b');
+    const cancel = [...host.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Cancel auto-join',
+    )!;
+    act(() => cancel.click());
+    expect(project()).toBe(initial);
+    const clean = makeProject({ features: initial.features.slice(0, 2) });
+    act(() => {
+      openSession(makeSession(clean));
+      selectTrails(['a', 'b']);
+    });
+    act(() => button('Preview auto-join').click());
+    expect(host.querySelector('[aria-label="Auto-join preview"]')?.textContent).toContain(
+      '1 chains to join; 0 ambiguous',
+    );
+    const apply = [...host.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Apply auto-join',
+    )!;
+    act(() => apply.click());
+    expect(project().features).toHaveLength(1);
+    act(() => undoButton().click());
+    expect(project()).toStrictEqual(clean);
+  });
+});
 
 const cand: ReviewCandidate = {
   id: 'k1',
@@ -60,8 +157,22 @@ describe('Toolbar Undo button (T-213)', () => {
     expect(undoButton().disabled).toBe(true);
 
     act(() => setCandidates([cand]));
-    const a: ReviewCandidate = { ...cand, id: 'k1a', pts: [[0, 0], [4, 4]] };
-    const b: ReviewCandidate = { ...cand, id: 'k1b', pts: [[4, 4], [9, 9]] };
+    const a: ReviewCandidate = {
+      ...cand,
+      id: 'k1a',
+      pts: [
+        [0, 0],
+        [4, 4],
+      ],
+    };
+    const b: ReviewCandidate = {
+      ...cand,
+      id: 'k1b',
+      pts: [
+        [4, 4],
+        [9, 9],
+      ],
+    };
     act(() => splitCandidateInReview([a, b]));
     render(<Toolbar />);
     expect(undoButton().disabled).toBe(false);
@@ -90,8 +201,22 @@ describe('Toolbar Undo button (T-213)', () => {
     expect(appStore.getState().history.canUndo).toBe(true);
 
     act(() => setCandidates([cand]));
-    const a: ReviewCandidate = { ...cand, id: 'k1a', pts: [[0, 0], [4, 4]] };
-    const b: ReviewCandidate = { ...cand, id: 'k1b', pts: [[4, 4], [9, 9]] };
+    const a: ReviewCandidate = {
+      ...cand,
+      id: 'k1a',
+      pts: [
+        [0, 0],
+        [4, 4],
+      ],
+    };
+    const b: ReviewCandidate = {
+      ...cand,
+      id: 'k1b',
+      pts: [
+        [4, 4],
+        [9, 9],
+      ],
+    };
     act(() => splitCandidateInReview([a, b]));
     render(<Toolbar />);
 
@@ -109,10 +234,37 @@ describe('Toolbar Undo button (T-213)', () => {
   });
 
   it('a pending split waits behind an open draft (acceptance 2 and 3)', async () => {
-    act(() => setDraft({ kind: 'trail', pts: [[0, 0], [1, 1]], cps: [2], ink: null, color: '#D9480F', name: 'Trail 1', editId: null }));
+    act(() =>
+      setDraft({
+        kind: 'trail',
+        pts: [
+          [0, 0],
+          [1, 1],
+        ],
+        cps: [2],
+        ink: null,
+        color: '#D9480F',
+        name: 'Trail 1',
+        editId: null,
+      }),
+    );
     act(() => setCandidates([cand]));
-    const a: ReviewCandidate = { ...cand, id: 'k1a', pts: [[0, 0], [4, 4]] };
-    const b: ReviewCandidate = { ...cand, id: 'k1b', pts: [[4, 4], [9, 9]] };
+    const a: ReviewCandidate = {
+      ...cand,
+      id: 'k1a',
+      pts: [
+        [0, 0],
+        [4, 4],
+      ],
+    };
+    const b: ReviewCandidate = {
+      ...cand,
+      id: 'k1b',
+      pts: [
+        [4, 4],
+        [9, 9],
+      ],
+    };
     act(() => splitCandidateInReview([a, b]));
     render(<Toolbar />);
 

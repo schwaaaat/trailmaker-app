@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { formatLength } from '../../core/export/format';
 import { rgbToHex } from '../../core/trace/color';
 import type { ColorChip } from '../../core/types';
+import { currentEditor } from '../editor/EditorStage';
 import {
   removeChip,
   setAutoTraceSettings,
@@ -20,6 +21,7 @@ import {
   setCandidateOn,
   setCandidateSplitFocus,
   setMergeAcrossColors,
+  setRegionTraceMode,
   undoCandidateSplit,
   type ReviewCandidate,
 } from '../../state/store';
@@ -34,6 +36,7 @@ import {
 import { useBatchedCount } from './FeaturesPanel';
 import { cachedCandidateLengthM, fillCandidateLengths } from './lengths';
 import {
+  autoTraceRegion,
   acceptReviewed,
   cancelRunningJob,
   confidenceBand,
@@ -363,6 +366,8 @@ export function TracePanel() {
   const auto = useApp((s) => s.session?.project.autoTrace ?? null);
   const busy = useApp((s) => s.job !== null);
   const esriBackdrop = useApp((s) => s.editorBackdrop === 'esri');
+  const regionTraceMode = useApp((s) => s.regionTraceMode ?? false);
+  const tiledMap = useApp((s) => Boolean(s.session?.map.tiles));
   if (!open || !trace || !auto) return null;
   const setTrace = (patch: Parameters<typeof setTraceSettings>[1]) => {
     const p = project();
@@ -371,6 +376,14 @@ export function TracePanel() {
   const setAuto = (patch: Parameters<typeof setAutoTraceSettings>[1]) => {
     const p = project();
     if (p) edit(setAutoTraceSettings(p, patch));
+  };
+  const traceCurrentView = () => {
+    const editor = currentEditor();
+    const region = editor?.visibleMapRegion;
+    if (!editor || !region) return;
+    editor.setRegionSelection(null);
+    setRegionTraceMode(false);
+    void autoTraceRegion(region);
   };
   return (
     <div className="trace-panel">
@@ -450,6 +463,36 @@ export function TracePanel() {
         >
           Find trails
         </button>
+        {tiledMap ? (
+          <button
+            type="button"
+            className="btn small wide"
+            aria-pressed={regionTraceMode}
+            disabled={busy}
+            onClick={() => setRegionTraceMode(!regionTraceMode)}
+          >
+            Auto-trace a region
+          </button>
+        ) : null}
+        {tiledMap && regionTraceMode ? (
+          <>
+            <p className="hint" role="status">
+              Drag a rectangle on the map. Press Escape to cancel.
+            </p>
+            <p className="hint">
+              Press V or choose Trace current view to trace the visible map bounds.
+            </p>
+            <button
+              type="button"
+              className="btn small wide"
+              aria-keyshortcuts="V"
+              disabled={busy}
+              onClick={traceCurrentView}
+            >
+              Trace current view
+            </button>
+          </>
+        ) : null}
         <JobBar />
         <Review />
       </div>

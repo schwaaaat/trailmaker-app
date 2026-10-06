@@ -7,6 +7,8 @@ import {
   call,
   cancelJob,
   imageFor,
+  loadPixelRegion,
+  preferredToolPixelLevel,
   isCancelled,
   jobDone,
   startJob,
@@ -158,6 +160,119 @@ function progressReporter(jobId: string, index: number, count: number) {
   };
 }
 
+function boundedTrailChunks(pts: readonly Px[], pinned: readonly number[]) {
+  if (pts.length < 2) return [];
+  const pinnedSet = new Set(pinned);
+  const dense: Px[] = [pts[0]!];
+  const densePinned = new Set<number>();
+  if (pinnedSet.has(0)) densePinned.add(0);
+  for (let i = 1; i < pts.length; i++) {
+    const from = pts[i - 1]!;
+    const to = pts[i]!;
+    const count = Math.max(1, Math.ceil(Math.hypot(to[0] - from[0], to[1] - from[1]) / 128));
+    for (let step = 1; step <= count; step++) {
+      const t = step / count;
+      dense.push([from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t]);
+    }
+    if (pinnedSet.has(i)) densePinned.add(dense.length - 1);
+  }
+  const chunks: { pts: Px[]; pinned: number[] }[] = [];
+  for (let from = 0; from < dense.length - 1;) {
+    const to = Math.min(dense.length - 1, from + 8);
+    chunks.push({
+      pts: dense.slice(from, to + 1),
+      pinned: [
+        0,
+        to - from,
+        ...[...densePinned]
+          .filter((index) => index > from && index < to)
+          .map((index) => index - from),
+      ],
+    });
+    from = to;
+  }
+  return chunks;
+}
+
+async function refineTiledTrail(
+  map: NonNullable<ReturnType<typeof appStore.getState>['session']>['map'],
+  trail: Trail,
+  corridorPx: number,
+  tolerance: number,
+  pinned: readonly number[],
+  jobId: ReturnType<typeof startJob>,
+  onProgress: (progress: { fraction: number; stage: string }) => void,
+): Promise<RefineResult> {
+  const chunks = boundedTrailChunks(trail.pts, pinned);
+  const output: Px[] = [];
+  const segments: RefineResult['segments'][number][] = [];
+  let ink = trail.ink ?? ([0, 0, 0] as const);
+  let ms = 0;
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+    const chunk = chunks[chunkIndex]!;
+    const xs = chunk.pts.map(([x]) => x);
+    const ys = chunk.pts.map(([, y]) => y);
+    const margin = Math.ceil(corridorPx + 2);
+    const rect = {
+      x: Math.max(0, Math.floor(Math.min(...xs) - margin)),
+      y: Math.max(0, Math.floor(Math.min(...ys) - margin)),
+      width:
+        Math.min(map.meta.width, Math.ceil(Math.max(...xs) + margin)) -
+        Math.max(0, Math.floor(Math.min(...xs) - margin)),
+      height:
+        Math.min(map.meta.height, Math.ceil(Math.max(...ys) + margin)) -
+        Math.max(0, Math.floor(Math.min(...ys) - margin)),
+    };
+    const patch = await loadPixelRegion(map, rect, preferredToolPixelLevel(map));
+    try {
+      const result = await call((api) =>
+        api.refineTrail(
+          {
+            imageId: patch.imageId,
+            pts: chunk.pts.map(patch.toLocal),
+            corridorPx: corridorPx * patch.pixelScale,
+            ink: trail.ink ?? (chunkIndex ? ink : null),
+            tolerance,
+            pinned: chunk.pinned,
+          },
+          {
+            jobId,
+            onProgress: (progress) =>
+              onProgress({
+                fraction: (chunkIndex + progress.fraction) / chunks.length,
+                stage: `Refining corridor ${chunkIndex + 1} of ${chunks.length}…`,
+              }),
+          },
+        ),
+      );
+      ink = result.ink;
+      ms += result.ms;
+      const mapped = result.pts.map(patch.toMap);
+      const offset = output.length ? output.length - 1 : 0;
+      if (output.length) output.push(...mapped.slice(1));
+      else output.push(...mapped);
+      for (const segment of result.segments) {
+        const next = {
+          ...segment,
+          from: offset + segment.from,
+          to: offset + segment.to,
+        };
+        const previous = segments.at(-1);
+        if (previous && previous.refined === next.refined && previous.to === next.from) {
+          segments[segments.length - 1] = {
+            ...previous,
+            to: next.to,
+            confidence: (previous.confidence + next.confidence) / 2,
+          };
+        } else segments.push(next);
+      }
+    } finally {
+      await patch.release();
+    }
+  }
+  return { pts: output, segments, ink, ms };
+}
+
 export function startRefinement(featureIds?: readonly FeatureId[], batch = false): Promise<void> {
   return track(runRefinement(featureIds, batch));
 }
@@ -174,7 +289,7 @@ async function runRefinement(featureIds?: readonly FeatureId[], batch = false): 
   if (!trails.length) return;
   setRefinePreview(null);
   let imageId = state.imageId;
-  if (!imageId) {
+  if (!session.map.tiles && !imageId) {
     try {
       imageId = await imageFor(session.map);
     } catch (error) {
@@ -198,21 +313,32 @@ async function runRefinement(featureIds?: readonly FeatureId[], batch = false): 
         job: { kind: 'refine', jobId, fraction: index / trails.length, stage: 'Refining trail…' },
       });
       try {
-        const result = await call((api) =>
-          api.refineTrail(
-            {
-              imageId,
-              pts: trail.pts,
-              corridorPx,
-              ink: trail.ink,
-              tolerance: project.trace.tolerance,
-              pinned: trail.pts.flatMap((point, pointIndex) =>
-                junctions.has(`${point[0]},${point[1]}`) ? [pointIndex] : [],
-              ),
-            },
-            { jobId, onProgress: progressReporter(jobId, index, trails.length) },
-          ),
+        const trailPinned = trail.pts.flatMap((point, pointIndex) =>
+          junctions.has(`${point[0]},${point[1]}`) ? [pointIndex] : [],
         );
+        const result = session.map.tiles
+          ? await refineTiledTrail(
+              session.map,
+              trail,
+              corridorPx,
+              project.trace.tolerance,
+              trailPinned,
+              jobId,
+              progressReporter(jobId, index, trails.length),
+            )
+          : await call((api) =>
+              api.refineTrail(
+                {
+                  imageId: imageId!,
+                  pts: trail.pts,
+                  corridorPx,
+                  ink: trail.ink,
+                  tolerance: project.trace.tolerance,
+                  pinned: trailPinned,
+                },
+                { jobId, onProgress: progressReporter(jobId, index, trails.length) },
+              ),
+            );
         if (!stillOn(session.map) || appStore.getState().session?.project !== project) {
           if (appStore.getState().job?.jobId === jobId) appStore.setState({ job: null });
           return;

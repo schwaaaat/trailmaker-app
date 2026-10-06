@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_DOCS, EMPTY, MIXED, ODD, OPTS, OPTS_KM, expectGolden } from './__golden__/docs';
+import { ALL_DOCS, EMPTY, MIXED, ODD, OPTS, OPTS_KM, TRAIL, expectGolden } from './__golden__/docs';
 import { geoJsonParts, toGeoJson } from './geojson';
 
 describe('toGeoJson', () => {
@@ -56,6 +56,32 @@ describe('toGeoJson', () => {
     const fc = JSON.parse(toGeoJson(ODD, OPTS));
     expect(fc.features[0].properties.name).toBe('Tab\tand bell\u0007');
     expect(fc.features[1].geometry.coordinates).toStrictEqual([0, -1e-7]);
+  });
+
+  it('includes route and direction properties for classified trails and omits them otherwise', () => {
+    const doc = {
+      name: 'Routes',
+      features: [
+        {
+          ...TRAIL,
+          id: 'one-way-1',
+          route: { kind: 'one-way' as const },
+        },
+        {
+          ...TRAIL,
+          id: 'loop-1',
+          route: { kind: 'loop' as const, direction: 'clockwise' as const },
+        },
+      ],
+    };
+    const fc = JSON.parse(toGeoJson(doc, OPTS));
+    expect(fc.features[0].properties.route).toBe('one-way');
+    expect(fc.features[0].properties.direction).toBeUndefined();
+    expect(fc.features[0].properties.description).toContain('Route: One-way');
+
+    expect(fc.features[1].properties.route).toBe('loop');
+    expect(fc.features[1].properties.direction).toBe('clockwise');
+    expect(fc.features[1].properties.description).toContain('Route: Loop (clockwise)');
   });
 });
 

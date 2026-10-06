@@ -135,4 +135,89 @@ describe('VertexMenu (T-209)', () => {
     });
     expect(appStore.getState().vertexMenu).toBeNull();
   });
+
+  it('shows "Set as loop start" for a loop vertex and rotates loop start', () => {
+    const loopTrail: Feature = {
+      ...trail,
+      id: 'f1',
+      pts: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 0],
+      ],
+      route: { kind: 'loop', direction: 'clockwise' },
+    };
+    openSession(makeSession(makeProject({ features: [loopTrail], seq: 5 })));
+    act(() =>
+      openVertexMenu({ featureId: 'f1', index: 1, canSplit: true, client: { x: 10, y: 20 } }),
+    );
+    render(<VertexMenu />);
+    const setStartBtn = byText('Set as loop start');
+    expect(setStartBtn).toBeTruthy();
+    expect(setStartBtn?.textContent).toContain('T');
+    click(setStartBtn!);
+    const p = appStore.getState().session!.project;
+    const f = p.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.pts[0]).toStrictEqual([100, 0]);
+    expect(f.pts.at(-1)).toStrictEqual([100, 0]);
+    expect(appStore.getState().vertexMenu).toBeNull();
+  });
+
+  it('shows "Set as trailhead" for the end vertex of a one-way trail and swaps start/end', () => {
+    const oneWayTrail: Feature = {
+      ...trail,
+      id: 'f1',
+      pts: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+      ],
+      route: { kind: 'one-way' },
+    };
+    openSession(makeSession(makeProject({ features: [oneWayTrail], seq: 5 })));
+    act(() =>
+      openVertexMenu({ featureId: 'f1', index: 2, canSplit: false, client: { x: 10, y: 20 } }),
+    );
+    render(<VertexMenu />);
+    const setThBtn = byText('Set as trailhead');
+    expect(setThBtn).toBeTruthy();
+    expect(setThBtn?.textContent).toContain('T');
+    click(setThBtn!);
+    const p = appStore.getState().session!.project;
+    const f = p.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.pts[0]).toStrictEqual([100, 100]);
+    expect(f.pts.at(-1)).toStrictEqual([0, 0]);
+    expect(appStore.getState().vertexMenu).toBeNull();
+  });
+
+  it('responds to keyboard shortcut T for setting loop start', () => {
+    const loopTrail: Feature = {
+      ...trail,
+      id: 'f1',
+      pts: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 0],
+      ],
+      route: { kind: 'loop', direction: 'clockwise' },
+    };
+    openSession(makeSession(makeProject({ features: [loopTrail], seq: 5 })));
+    act(() =>
+      openVertexMenu({ featureId: 'f1', index: 2, canSplit: true, client: { x: 10, y: 20 } }),
+    );
+    render(<VertexMenu />);
+    const setStartBtn = byText('Set as loop start')!;
+    act(() => {
+      setStartBtn.focus();
+      setStartBtn.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 't', bubbles: true, cancelable: true }),
+      );
+    });
+    const p = appStore.getState().session!.project;
+    const f = p.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.pts[0]).toStrictEqual([100, 100]);
+    expect(appStore.getState().vertexMenu).toBeNull();
+  });
 });

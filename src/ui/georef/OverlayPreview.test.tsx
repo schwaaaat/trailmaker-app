@@ -209,6 +209,36 @@ describe('OverlayPreview', () => {
     expect(loader.loadMapLibre).not.toHaveBeenCalled();
   });
 
+  it('keeps the fallback preview safe when object URLs are unavailable', async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: undefined });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: undefined });
+
+    try {
+      createTestSession(validAnchors);
+      updateBasemapSettings({ enabled: false });
+      render(<OverlayPreview />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        writable: true,
+        value: originalCreateObjectURL,
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        writable: true,
+        value: originalRevokeObjectURL,
+      });
+    }
+  });
+
   it('loads MapLibre, mounts overlay, feature layers, and controls when enabled', async () => {
     updateBasemapSettings({ enabled: true });
     createTestSession(validAnchors);

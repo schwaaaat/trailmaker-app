@@ -20,7 +20,7 @@ test('split, join, and undo both topology edits exactly [T-209]', async ({ page 
     };
     window.__trailmaker!.session.openSession({
       project: {
-        version: 2,
+        version: 4,
         name: 'Topology',
         image: meta,
         anchors: [],
@@ -52,7 +52,7 @@ test('split, join, and undo both topology edits exactly [T-209]', async ({ page 
 
   const project = () => page.evaluate(() => window.__trailmaker!.session.getSession()!.project);
   const original = await project();
-  await page.getByRole('toolbar', { name: 'Map tools' }).getByRole('button', { name: 'Select' }).click();
+  await page.getByRole('toolbar', { name: 'Map tools' }).getByRole('button', { name: 'Select', exact: true }).click();
   await page.getByRole('list', { name: 'Traced features' }).getByRole('button', { name: /Ridge/ }).click();
   const middle = await page.evaluate(() => window.__trailmaker!.imageToClient([500, 500]));
   await page.mouse.click(middle.x, middle.y, { button: 'right' });

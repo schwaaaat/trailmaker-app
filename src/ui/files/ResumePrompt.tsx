@@ -4,6 +4,7 @@ import { readAutosave, type RestoredAutosave } from '../../io/autosave';
 import { clearActiveGpx, setActiveGpx } from '../../io/gpxStorage';
 import { loadImageFile } from '../../io/image';
 import { loadPdfFile } from '../../io/pdf';
+import { restoreTiledProjectMap } from '../../io/tile-raster';
 import { sessionBridge } from '../../state/bridge';
 import { setBusy as storeSetBusy, showToast as storeShowToast } from '../../state/store';
 import type { LoadedMap, Session, SessionBridge } from '../contract';
@@ -81,7 +82,9 @@ export function ResumePrompt({
 
     try {
       let map: LoadedMap;
-      if (project.image.source.kind === 'pdf') {
+      if (project.image.source.kind === 'tiles') {
+        map = await restoreTiledProjectMap(project.image, image);
+      } else if (project.image.source.kind === 'pdf') {
         map = await loadPdfFile(image, project.image.fileName, project.image.source.page);
       } else {
         map = await loadImageFile(image, project.image.fileName);
@@ -93,6 +96,11 @@ export function ResumePrompt({
         clearActiveGpx();
       }
       bridge.openSession({ project: migrated, map });
+      if (map.meta.source.kind === 'tiles' && !map.tiles) {
+        showToast(
+          'Session resumed with its overview. Download the tiles again from Capture satellite for full offline detail.',
+        );
+      }
     } catch {
       showToast(RESUME_FAILED_MESSAGE);
     } finally {

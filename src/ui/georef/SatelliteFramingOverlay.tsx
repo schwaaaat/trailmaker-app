@@ -1,6 +1,6 @@
 // Lane C. Satellite capture framing overlay, resolution calculation, zoom selection and progress UI (card T-318, D-031).
 import React, { type FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Map as MapLibreMap } from 'maplibre-gl';
+import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import {
   captureSatelliteView,
   buildSatelliteProject,
@@ -15,6 +15,26 @@ import {
   type FramedBounds,
 } from '../../io/satellite-capture';
 import { loadSettings, updateBasemapSettings, type SatelliteProviderId } from '../../io/settings';
+import { DEFAULT_TILE_ZOOM, planTiledBoundary, tileLevelPyramid } from '../../io/tiled-capture';
+import type { TiledBoundaryPlan } from '../../io/tiled-capture';
+import {
+  inspectTiledMapServer,
+  MARTIN_TILE_MAPSERVER_URL,
+  tiledBoundaryWithinCoverage,
+  type TiledImagerySource,
+} from '../../io/tile-service';
+import { createTileCaptureSession } from '../../io/tile-capture-session';
+import { countPlannedTileKeys, tileDownloadProgress } from '../../io/tile-downloader';
+import {
+  isTiledDownloadDisabled,
+  resetTiledDownloadUiState,
+  type TileEstimateState,
+  type TileProgressState,
+} from '../../io/tiled-download-ui-state';
+import { deleteTiledMap, listResumableTileDownloads, tiledMapStorageId } from '../../io/tile-store';
+import type { TileDownloadManifest } from '../../io/tile-store';
+import { buildOverviewPyramid, invalidateTiledMapHandle, loadTiledMap } from '../../io/tile-raster';
+import { createProjectForTiledMap } from '../../io/tiled-project';
 import {
   achievableImageryResolution,
   IMAGERY_SOURCES,
@@ -57,6 +77,7 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const framingBoxRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const tileSourceRequestRef = useRef<Promise<TiledImagerySource | null> | null>(null);
 
   const [bounds, setBounds] = useState<FramedBounds | null>(null);
   const [selectedZoom, setSelectedZoom] = useState<number | null>(null);
@@ -68,12 +89,38 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
   const [serviceUrl, setServiceUrl] = useState(() => loadSettings().basemap.customImageryUrl ?? '');
   const [serviceLoading, setServiceLoading] = useState(false);
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [tileSource, setTileSource] = useState<TiledImagerySource | null>(null);
+  const [tileSourceLoading, setTileSourceLoading] = useState(false);
+  const [drawingBoundary, setDrawingBoundary] = useState(false);
+  const [tileBoundary, setTileBoundary] = useState<readonly (readonly [number, number])[]>([]);
+  const [selectedBoundaryIndex, setSelectedBoundaryIndex] = useState<number | null>(null);
+  const [tileZoom, setTileZoom] = useState(DEFAULT_TILE_ZOOM);
+  const [tileEstimate, setTileEstimate] = useState<TileEstimateState | null>(null);
+  const [tileProgress, setTileProgress] = useState<TileProgressState | null>(null);
+  const [tileDownloading, setTileDownloading] = useState(false);
+  const [tileDeleting, setTileDeleting] = useState(false);
+  const [tilePaused, setTilePaused] = useState(false);
+  const [tileError, setTileError] = useState<string | null>(null);
+  const [tileStorageConfirmed, setTileStorageConfirmed] = useState(false);
+  const [resumableTileDownloads, setResumableTileDownloads] = useState<
+    readonly TileDownloadManifest[]
+  >([]);
+  const [deletedTileMapId, setDeletedTileMapId] = useState<string | null>(null);
+  const tileCaptureRef = useRef<ReturnType<typeof createTileCaptureSession> | null>(null);
+  const tileCompletionRef = useRef<(() => Promise<void>) | null>(null);
 
   useFocusTrap({
     active: isOpen && !capturing,
     containerRef,
     onClose,
   });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void listResumableTileDownloads()
+      .then(setResumableTileDownloads)
+      .catch(() => setResumableTileDownloads([]));
+  }, [isOpen]);
 
   const inspectService = useCallback(async (value: string) => {
     const url = value.trim().replace(/\/$/, '');
@@ -235,6 +282,442 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
     };
   }, [isOpen, map, updateBounds]);
 
+  useEffect(() => {
+    if (!map || !isOpen || !drawingBoundary) return;
+    const addVertex = (event: {
+      lngLat: { lng: number; lat: number };
+      originalEvent?: { detail?: number };
+    }) => {
+      if (event.originalEvent?.detail && event.originalEvent.detail > 1) return;
+      const point = [event.lngLat.lat, event.lngLat.lng] as const;
+      setTileBoundary((current) => [...current, point]);
+      setSelectedBoundaryIndex(tileBoundary.length);
+    };
+    const closeOnDoubleClick = (event: {
+      preventDefault?: () => void;
+      lngLat: { lng: number; lat: number };
+    }) => {
+      event.preventDefault?.();
+      if (tileBoundary.length >= 3) {
+        const previous = tileBoundary[tileBoundary.length - 1];
+        if (
+          previous &&
+          Math.abs(previous[0] - event.lngLat.lat) < 0.000001 &&
+          Math.abs(previous[1] - event.lngLat.lng) < 0.000001
+        ) {
+          setTileBoundary((current) => current.slice(0, -1));
+        }
+        setDrawingBoundary(false);
+      }
+    };
+    map.on('click', addVertex);
+    map.on('dblclick', closeOnDoubleClick);
+    return () => {
+      map.off('click', addVertex);
+      map.off('dblclick', closeOnDoubleClick);
+    };
+  }, [drawingBoundary, isOpen, map, tileBoundary]);
+
+  useEffect(() => {
+    if (!map || !isOpen || drawingBoundary || tileBoundary.length < 3) return;
+    let draggedIndex: number | null = null;
+    const dragPanWasEnabled = map.dragPan.isEnabled();
+    const move = (event: { lngLat: { lat: number; lng: number } }) => {
+      if (draggedIndex === null) return;
+      const point = [event.lngLat.lat, event.lngLat.lng] as const;
+      setTileBoundary((current) =>
+        current.map((value, index) => (index === draggedIndex ? point : value)),
+      );
+    };
+    const endDrag = () => {
+      if (draggedIndex === null) return;
+      draggedIndex = null;
+      map.off('mousemove', move);
+      if (dragPanWasEnabled) map.dragPan.enable();
+    };
+    const startDrag = (event: { point: { x: number; y: number } }) => {
+      const selected = tileBoundary
+        .map(([lat, lon], index) => {
+          const point = map.project([lon, lat]);
+          return { index, distance: Math.hypot(point.x - event.point.x, point.y - event.point.y) };
+        })
+        .sort((a, b) => a.distance - b.distance)[0];
+      if (!selected || selected.distance > 18) return;
+      draggedIndex = selected.index;
+      setSelectedBoundaryIndex(selected.index);
+      map.dragPan.disable();
+      map.on('mousemove', move);
+      map.once('mouseup', endDrag);
+    };
+    map.on('mousedown', startDrag);
+    return () => {
+      map.off('mousedown', startDrag);
+      map.off('mousemove', move);
+      if (dragPanWasEnabled) map.dragPan.enable();
+    };
+  }, [drawingBoundary, isOpen, map, tileBoundary]);
+
+  useEffect(() => {
+    if (!map || !isOpen || typeof map.isStyleLoaded !== 'function' || !map.isStyleLoaded()) return;
+    const sourceId = 'trailmaker-tiled-boundary';
+    const coordinates = tileBoundary.map(([lat, lon]) => [lon, lat]);
+    const polygonReady = tileBoundary.length >= 3 && !drawingBoundary;
+    const geometry = polygonReady
+      ? { type: 'Polygon' as const, coordinates: [[...coordinates, coordinates[0]!]] }
+      : { type: 'LineString' as const, coordinates };
+    const data = {
+      type: 'Feature' as const,
+      properties: {},
+      geometry,
+    };
+    const existing = map.getSource(sourceId) as GeoJSONSource | undefined;
+    if (existing) {
+      existing.setData(data);
+    } else {
+      map.addSource(sourceId, { type: 'geojson', data });
+      map.addLayer({
+        id: `${sourceId}-fill`,
+        type: 'fill',
+        source: sourceId,
+        paint: { 'fill-color': '#f3b61f', 'fill-opacity': 0.18 },
+      });
+      map.addLayer({
+        id: `${sourceId}-line`,
+        type: 'line',
+        source: sourceId,
+        paint: { 'line-color': '#f3b61f', 'line-width': 3 },
+      });
+    }
+    const vertexSourceId = `${sourceId}-vertices`;
+    const vertexData = {
+      type: 'FeatureCollection' as const,
+      features: coordinates.map((coordinate) => ({
+        type: 'Feature' as const,
+        properties: {},
+        geometry: { type: 'Point' as const, coordinates: coordinate },
+      })),
+    };
+    const vertices = map.getSource(vertexSourceId) as GeoJSONSource | undefined;
+    if (vertices) {
+      vertices.setData(vertexData);
+    } else {
+      map.addSource(vertexSourceId, { type: 'geojson', data: vertexData });
+      map.addLayer({
+        id: `${vertexSourceId}-circles`,
+        type: 'circle',
+        source: vertexSourceId,
+        paint: {
+          'circle-radius': 6,
+          'circle-color': '#f3b61f',
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+        },
+      });
+    }
+  }, [drawingBoundary, isOpen, map, tileBoundary]);
+
+  const ensureTileSource = async () => {
+    if (tileSource) return tileSource;
+    if (tileSourceRequestRef.current) return tileSourceRequestRef.current;
+    setTileSourceLoading(true);
+    setTileError(null);
+    const url = activeSource?.id.startsWith('custom:')
+      ? activeSource.url
+      : MARTIN_TILE_MAPSERVER_URL;
+    const request = inspectTiledMapServer(url)
+      .then((source) => {
+        setTileSource(source);
+        setTileZoom(
+          source.levels.some((level) => level.z === DEFAULT_TILE_ZOOM)
+            ? DEFAULT_TILE_ZOOM
+            : source.levels[0]!.z,
+        );
+        return source;
+      })
+      .catch((cause: unknown) => {
+        setTileError(
+          cause instanceof Error ? cause.message : 'Could not read Martin County tile service.',
+        );
+        return null;
+      })
+      .finally(() => {
+        setTileSourceLoading(false);
+        tileSourceRequestRef.current = null;
+      });
+    tileSourceRequestRef.current = request;
+    return request;
+  };
+
+  const handleUseCustomTiledService = async () => {
+    if (!rightsConfirmed) return;
+    setTileSourceLoading(true);
+    setTileError(null);
+    try {
+      const source = await inspectTiledMapServer(serviceUrl);
+      setTileSource(source);
+      setTileZoom(
+        source.levels.some((level) => level.z === DEFAULT_TILE_ZOOM)
+          ? DEFAULT_TILE_ZOOM
+          : source.levels[0]!.z,
+      );
+    } catch (cause) {
+      setTileError(
+        cause instanceof Error ? cause.message : 'This is not a cached tiled MapServer.',
+      );
+    } finally {
+      setTileSourceLoading(false);
+    }
+  };
+
+  const handleStartBoundary = async () => {
+    if (!map) {
+      setTileError('Open the basemap before drawing a tiled imagery boundary.');
+      return;
+    }
+    if (activeSource?.id.startsWith('custom:') && !rightsConfirmed) {
+      setTileError('Confirm that you have the right to use this tiled imagery service.');
+      return;
+    }
+    setTileBoundary([]);
+    setTileEstimate(null);
+    setTileProgress(null);
+    setTileStorageConfirmed(false);
+    setTileError(null);
+    setDrawingBoundary(true);
+    if (!(await ensureTileSource())) setDrawingBoundary(false);
+  };
+
+  const prepareTiledCapture = (
+    source: TiledImagerySource,
+    plan: TiledBoundaryPlan,
+    boundary: readonly (readonly [number, number])[],
+    mapId?: string,
+    onFullDownload?: (loadedMap: Awaited<ReturnType<typeof loadTiledMap>>) => void,
+  ) => {
+    const session = createTileCaptureSession({
+      source,
+      plan,
+      boundary,
+      ...(mapId ? { mapId } : {}),
+      onProgress: (complete, total, missing) => setTileProgress({ complete, total, missing }),
+    });
+    tileCompletionRef.current = async () => {
+      const levels = tileLevelPyramid(plan.width, plan.height, plan.tileSize);
+      await buildOverviewPyramid(session.mapId, levels, plan.tileSize);
+      const image = {
+        fileName: `${source.name} tiled imagery`,
+        width: plan.width,
+        height: plan.height,
+        originalWidth: plan.width,
+        originalHeight: plan.height,
+        source: {
+          kind: 'tiles' as const,
+          sourceId: source.id,
+          z: plan.z,
+          tileSize: plan.tileSize,
+          origin: plan.origin,
+          boundary,
+          tileCount: plan.tiles.length,
+        },
+        sha256: 'tiled-map-overview-pending',
+        attribution: source.attribution,
+        ...(source.year ? { acquisitionYear: source.year } : {}),
+      };
+      const loadedMap = await loadTiledMap(image, session.mapId);
+      if (onFullDownload) {
+        onFullDownload(loadedMap);
+        return;
+      }
+      const project = createProjectForTiledMap(loadedMap.meta, source, plan, boundary);
+      clearActiveGpx();
+      sessionBridge.openSession({ project, map: loadedMap });
+      showToast('Tiled map is ready for tracing and offline use.');
+      onClose();
+    };
+    tileCaptureRef.current = session;
+    return session;
+  };
+
+  const handleRedownloadTiledMap = async () => {
+    const existingSession = sessionBridge.getSession();
+    const image = existingSession?.project.image;
+    if (!image || image.source.kind !== 'tiles') return;
+    const expectedMap = existingSession.map;
+    setTileSourceLoading(true);
+    const clearedTileState = resetTiledDownloadUiState();
+    setTileEstimate(clearedTileState.estimate);
+    setTileProgress(clearedTileState.progress);
+    setTileStorageConfirmed(false);
+    setTilePaused(false);
+    setTileError(null);
+    try {
+      if (image.source.sourceId.startsWith('custom:') && !rightsConfirmed) {
+        throw new Error(
+          'Confirm that you have the right to use this custom tiled service before re-downloading.',
+        );
+      }
+      const url =
+        image.source.sourceId === 'martin-county'
+          ? MARTIN_TILE_MAPSERVER_URL
+          : image.source.sourceId.slice('custom:'.length);
+      const source = await inspectTiledMapServer(url);
+      const boundary = image.source.boundary;
+      const plan = planTiledBoundary(boundary, image.source.z, { tileSize: image.source.tileSize });
+      setTileSource(source);
+      setTileBoundary(boundary);
+      setTileZoom(image.source.z);
+      setDrawingBoundary(false);
+      const session = prepareTiledCapture(source, plan, boundary, undefined, (loadedMap) => {
+        if (!sessionBridge.replaceMap?.(expectedMap, loadedMap)) {
+          setTileError(
+            'The open map changed before tiles were restored; downloaded tiles were kept on this device.',
+          );
+          return;
+        }
+        setDeletedTileMapId(null);
+        showToast('Offline tiles are restored to the open project.');
+        onClose();
+      });
+      setTileEstimate(await session.estimate());
+    } catch (cause) {
+      setTileError(
+        cause instanceof Error ? cause.message : 'Could not prepare imagery re-download.',
+      );
+    } finally {
+      setTileSourceLoading(false);
+    }
+  };
+
+  const handleEstimateTiles = async () => {
+    setTileEstimate(null);
+    setTileProgress(null);
+    setTileStorageConfirmed(false);
+    const source = await ensureTileSource();
+    if (!source || tileBoundary.length < 3) return;
+    try {
+      setTileError(null);
+      if (!tiledBoundaryWithinCoverage(source, tileBoundary)) {
+        throw new Error('The drawn boundary extends outside this tiled service coverage.');
+      }
+      const plan = planTiledBoundary(tileBoundary, tileZoom, { tileSize: source.tileSize });
+      const session = prepareTiledCapture(source, plan, tileBoundary);
+      setTileEstimate(await session.estimate());
+      setTileStorageConfirmed(false);
+    } catch (cause) {
+      setTileError(
+        cause instanceof Error ? cause.message : 'Could not estimate the tile download.',
+      );
+    }
+  };
+
+  const handleResumeTileDownload = async (manifest: TileDownloadManifest) => {
+    setTileError(null);
+    setTileSourceLoading(true);
+    const clearedTileState = resetTiledDownloadUiState();
+    setTileEstimate(clearedTileState.estimate);
+    setTileProgress(clearedTileState.progress);
+    setTileStorageConfirmed(false);
+    setTilePaused(false);
+    try {
+      const url =
+        manifest.sourceId === 'martin-county'
+          ? MARTIN_TILE_MAPSERVER_URL
+          : manifest.sourceId.startsWith('custom:')
+            ? manifest.sourceId.slice('custom:'.length)
+            : '';
+      if (!url) throw new Error('The saved tile service reference is not supported.');
+      if (manifest.sourceId.startsWith('custom:') && !rightsConfirmed) {
+        throw new Error(
+          'Confirm that you have the right to use this custom tiled service before resuming.',
+        );
+      }
+      const source = await inspectTiledMapServer(url);
+      const boundary = manifest.boundary;
+      const plan = planTiledBoundary(boundary, manifest.z, { tileSize: manifest.tileSize });
+      setTileSource(source);
+      setTileBoundary(boundary);
+      setTileZoom(manifest.z);
+      setDrawingBoundary(false);
+      const session = prepareTiledCapture(
+        source,
+        { ...plan, tiles: manifest.tiles },
+        boundary,
+        manifest.mapId,
+      );
+      tileCaptureRef.current = session;
+      setTileEstimate(await session.estimate());
+      setTileProgress({
+        complete: countPlannedTileKeys(manifest.tiles, manifest.completedKeys),
+        total: manifest.tiles.length,
+        missing: countPlannedTileKeys(manifest.tiles, manifest.missingKeys),
+      });
+      setTileStorageConfirmed(false);
+    } catch (cause) {
+      setTileError(cause instanceof Error ? cause.message : 'Could not resume the tiled download.');
+    } finally {
+      setTileSourceLoading(false);
+    }
+  };
+
+  const handleDeleteDownloadedImagery = async () => {
+    const session = sessionBridge.getSession();
+    const source = session?.project.image.source;
+    if (!source || source.kind !== 'tiles') return;
+    const mapId = tiledMapStorageId(source);
+    const clearedTileState = resetTiledDownloadUiState();
+    setTileEstimate(clearedTileState.estimate);
+    setTileProgress(clearedTileState.progress);
+    setTileStorageConfirmed(false);
+    setTilePaused(false);
+    setTileError(null);
+    setTileDeleting(true);
+    const overviewMap = { ...session.map, tiles: null };
+    if (!sessionBridge.replaceMap?.(session.map, overviewMap)) {
+      setTileError('The open map changed; downloaded imagery was not deleted.');
+      setTileDeleting(false);
+      return;
+    }
+    invalidateTiledMapHandle(session.map.tiles);
+    try {
+      await deleteTiledMap(mapId);
+      setDeletedTileMapId(mapId);
+    } catch (cause) {
+      setTileError(
+        cause instanceof Error
+          ? `Could not remove all local tile records: ${cause.message}`
+          : 'Could not remove all local tile records.',
+      );
+      return;
+    } finally {
+      setTileDeleting(false);
+    }
+    showToast('Downloaded imagery removed from this device.');
+  };
+
+  const handleDownloadTiles = async () => {
+    const source = tileSource;
+    if (tileSourceLoading || tileDeleting || !source || !tileEstimate || !tileCaptureRef.current)
+      return;
+    if (tileEstimate.enoughSpace === false && !tileStorageConfirmed) return;
+    const plan = planTiledBoundary(tileBoundary, tileZoom, { tileSize: source.tileSize });
+    const capture = tileCaptureRef.current;
+    setTileDownloading(true);
+    setTilePaused(false);
+    setTileError(null);
+    try {
+      const result = await capture.download();
+      setTileProgress(tileDownloadProgress(result, plan.tiles.length));
+      if (result.missing.length)
+        showToast(`Downloaded tiled imagery with ${result.missing.length} missing tiles.`);
+      else await tileCompletionRef.current?.();
+    } catch (cause) {
+      setTileError(cause instanceof Error ? cause.message : 'Tiled imagery download failed.');
+    } finally {
+      setTileDownloading(false);
+      setTilePaused(false);
+    }
+  };
+
   // Derive optimal zoom whenever bounds change (if user has not manually locked a zoom)
   const mercatorFrame = useMemo(
     () =>
@@ -296,6 +779,19 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
     [bounds, mercatorFrame, sourceResolution],
   );
   const activeSource = sources.find((s) => s.id === selectedSourceId);
+  const tileDetailLevels = tileSource
+    ? tileSource.id === 'martin-county'
+      ? tileSource.levels.filter((level) => level.z === DEFAULT_TILE_ZOOM)
+      : tileSource.levels
+    : [];
+  const tiledPlan = useMemo(() => {
+    if (!tileSource || tileBoundary.length < 3) return null;
+    try {
+      return planTiledBoundary(tileBoundary, tileZoom, { tileSize: tileSource.tileSize });
+    } catch {
+      return null;
+    }
+  }, [tileBoundary, tileSource, tileZoom]);
   useEffect(() => {
     if (
       selectedSourceId.startsWith('custom:') &&
@@ -429,10 +925,18 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
       abortControllerRef.current.abort();
     }
     setCapturing(false);
+    if (tileDownloading) tileCaptureRef.current?.cancel();
     setProgress(null);
     onClose();
   };
 
+  const activeSession = sessionBridge.getSession();
+  const activeTiledSource = activeSession?.project.image.source;
+  const activeTiledMapId =
+    activeTiledSource?.kind === 'tiles' ? tiledMapStorageId(activeTiledSource) : null;
+  const activeTiledMapNeedsDownload =
+    activeTiledSource?.kind === 'tiles' &&
+    (!activeSession?.map.tiles || deletedTileMapId === activeTiledMapId);
   if (!isOpen) return null;
 
   return (
@@ -446,7 +950,7 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
       {/* Visual framing reticle and dimmed backdrop */}
       <div
         ref={framingBoxRef}
-        className="trailmaker-framing-box"
+        className={`trailmaker-framing-box${drawingBoundary ? ' is-hidden' : ''}`}
         data-testid="framing-box"
         aria-hidden="true"
       >
@@ -457,9 +961,11 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
       </div>
 
       {/* Top Banner / Framing controls */}
-      <div className="trailmaker-framing-banner">
+      <div className={`trailmaker-framing-banner${drawingBoundary ? ' is-drawing-boundary' : ''}`}>
         <div className="trailmaker-framing-title-row">
-          <h3 className="trailmaker-framing-title">Frame area to capture</h3>
+          <h3 className="trailmaker-framing-title">
+            {drawingBoundary ? 'Draw park boundary' : 'Frame area to capture'}
+          </h3>
           <button
             type="button"
             className="trailmaker-basemap-close-btn"
@@ -472,8 +978,262 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
         </div>
 
         <p className="trailmaker-framing-hint">
-          Pan and zoom the satellite map to position your park or trail area inside the frame.
+          {drawingBoundary
+            ? 'Click the basemap to outline the park boundary, or use the keyboard controls below.'
+            : 'Pan and zoom the satellite map to position your park or trail area inside the frame.'}
         </p>
+
+        <section className="trailmaker-tiled-capture" aria-label="Tiled imagery capture">
+          {activeTiledMapNeedsDownload && (
+            <button
+              type="button"
+              className="btn small"
+              disabled={tileSourceLoading || tileDownloading || tileDeleting}
+              onClick={() => void handleRedownloadTiledMap()}
+            >
+              Re-download offline tiles
+            </button>
+          )}
+          {activeTiledMapId && !activeTiledMapNeedsDownload && (
+            <button
+              type="button"
+              className="btn small"
+              disabled={tileDeleting || tileDownloading}
+              onClick={() => void handleDeleteDownloadedImagery()}
+            >
+              Delete downloaded imagery
+            </button>
+          )}
+          {resumableTileDownloads.map((manifest) => (
+            <button
+              key={manifest.mapId}
+              type="button"
+              className="btn small"
+              disabled={tileSourceLoading || tileDownloading}
+              onClick={() => void handleResumeTileDownload(manifest)}
+            >
+              Resume saved z{manifest.z} download ·{' '}
+              {countPlannedTileKeys(manifest.tiles, manifest.completedKeys)}/{manifest.tiles.length}{' '}
+              tiles saved
+            </button>
+          ))}
+          <button
+            type="button"
+            className="btn small"
+            disabled={capturing || tileDownloading || tileSourceLoading || !map}
+            onClick={() => void handleStartBoundary()}
+          >
+            {tileSourceLoading
+              ? 'Checking county tiles…'
+              : !map
+                ? 'Waiting for basemap…'
+                : drawingBoundary
+                  ? 'Drawing boundary…'
+                  : 'Draw tiled boundary'}
+          </button>
+          {tileError && (
+            <p role="alert" className="trailmaker-framing-error">
+              {tileError}
+            </p>
+          )}
+          {(drawingBoundary || tileBoundary.length > 0) && (
+            <div>
+              <p className="trailmaker-framing-hint">
+                {drawingBoundary
+                  ? 'Click the basemap to add boundary points, then close the boundary when it surrounds the park. Press Enter to add a point at the map center; C closes it.'
+                  : 'Select a point, then use arrow keys to nudge or drag its marker. Delete removes the selected point.'}
+              </p>
+              <div role="group" aria-label="Park boundary points">
+                <div
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (drawingBoundary && event.key === 'Enter' && map) {
+                      event.preventDefault();
+                      const center = map.getCenter();
+                      setTileBoundary((current) => [...current, [center.lat, center.lng]]);
+                      setSelectedBoundaryIndex(tileBoundary.length);
+                      return;
+                    }
+                    if (
+                      drawingBoundary &&
+                      event.key.toLowerCase() === 'c' &&
+                      tileBoundary.length >= 3
+                    ) {
+                      event.preventDefault();
+                      setDrawingBoundary(false);
+                      return;
+                    }
+                    if (drawingBoundary && event.key === 'Escape') {
+                      event.preventDefault();
+                      setDrawingBoundary(false);
+                      setTileBoundary([]);
+                      return;
+                    }
+                    if (selectedBoundaryIndex === null || !tileBoundary[selectedBoundaryIndex])
+                      return;
+                    const [lat, lon] = tileBoundary[selectedBoundaryIndex]!;
+                    const delta = event.shiftKey ? 0.0001 : 0.00002;
+                    const offsets: Record<string, readonly [number, number]> = {
+                      ArrowUp: [delta, 0],
+                      ArrowDown: [-delta, 0],
+                      ArrowLeft: [0, -delta],
+                      ArrowRight: [0, delta],
+                    };
+                    const offset = offsets[event.key];
+                    if (offset) {
+                      event.preventDefault();
+                      setTileBoundary((current) =>
+                        current.map((point, index) =>
+                          index === selectedBoundaryIndex
+                            ? [lat + offset[0], lon + offset[1]]
+                            : point,
+                        ),
+                      );
+                    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+                      event.preventDefault();
+                      setTileBoundary((current) =>
+                        current.filter((_, index) => index !== selectedBoundaryIndex),
+                      );
+                      setSelectedBoundaryIndex(null);
+                    }
+                  }}
+                >
+                  {tileBoundary.map(([lat, lon], index) => (
+                    <button
+                      key={`${index}-${lat}-${lon}`}
+                      type="button"
+                      aria-pressed={selectedBoundaryIndex === index}
+                      onClick={() => setSelectedBoundaryIndex(index)}
+                    >
+                      Point {index + 1} · {lat.toFixed(5)}, {lon.toFixed(5)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {drawingBoundary && (
+                <button
+                  type="button"
+                  className="btn small"
+                  disabled={tileBoundary.length < 3}
+                  onClick={() => setDrawingBoundary(false)}
+                >
+                  Close boundary
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => {
+                  setDrawingBoundary(false);
+                  setTileBoundary([]);
+                  setTileEstimate(null);
+                }}
+              >
+                Cancel boundary
+              </button>
+            </div>
+          )}
+          {tileSource && !drawingBoundary && (
+            <div>
+              <label htmlFor="tiled-capture-zoom">Tile detail</label>
+              <select
+                id="tiled-capture-zoom"
+                value={tileZoom}
+                disabled={tileDownloading}
+                onChange={(event) => {
+                  setTileZoom(Number(event.target.value));
+                  setTileEstimate(null);
+                }}
+              >
+                {tileDetailLevels.map((level) => (
+                  <option key={level.z} value={level.z}>
+                    {tileSource.id === 'martin-county' && level.z === DEFAULT_TILE_ZOOM
+                      ? 'Standard · '
+                      : ''}
+                    z{level.z} · {(level.resolutionM * 100).toFixed(1)} cm/px
+                  </option>
+                ))}
+              </select>
+              {tiledPlan && (
+                <p className="trailmaker-framing-hint">
+                  {(tiledPlan.areaSqMeters / 1_000_000).toFixed(2)} km² ·{' '}
+                  {tiledPlan.tiles.length.toLocaleString()} tiles
+                </p>
+              )}
+              <button
+                type="button"
+                className="btn small"
+                disabled={!tiledPlan || tileDownloading}
+                onClick={() => void handleEstimateTiles()}
+              >
+                Estimate download
+              </button>
+              {tileEstimate && (
+                <p role="status">
+                  About {(tileEstimate.estimatedBytes / 1_048_576).toFixed(1)} MB · about{' '}
+                  {Math.ceil(tileEstimate.estimatedSeconds / 60)} min at the service request limit.
+                </p>
+              )}
+              {tileEstimate?.enoughSpace === false && (
+                <label className="trailmaker-framing-warning">
+                  <input
+                    type="checkbox"
+                    checked={tileStorageConfirmed}
+                    onChange={(event) => setTileStorageConfirmed(event.target.checked)}
+                  />{' '}
+                  Available storage is below 1.5× the estimate. Continue anyway?
+                </label>
+              )}
+              {tileProgress && (
+                <p role="status">
+                  Tiles: {tileProgress.complete}/{tileProgress.total}; missing:{' '}
+                  {tileProgress.missing}
+                </p>
+              )}
+              {tileDownloading && (
+                <>
+                  <button
+                    type="button"
+                    className="btn small"
+                    onClick={() => {
+                      if (tilePaused) tileCaptureRef.current?.resume();
+                      else tileCaptureRef.current?.pause();
+                      setTilePaused(!tilePaused);
+                    }}
+                  >
+                    {tilePaused ? 'Resume download' : 'Pause download'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn small"
+                    onClick={() => tileCaptureRef.current?.cancel()}
+                  >
+                    Cancel tile download
+                  </button>
+                </>
+              )}
+              {tileEstimate && (
+                <button
+                  type="button"
+                  className="btn small"
+                  disabled={isTiledDownloadDisabled(
+                    tileSourceLoading || tileDeleting,
+                    tileDownloading,
+                    tileEstimate.enoughSpace,
+                    tileStorageConfirmed,
+                  )}
+                  onClick={() => void handleDownloadTiles()}
+                >
+                  {tileDownloading
+                    ? 'Downloading…'
+                    : tileProgress?.missing
+                      ? `Retry ${tileProgress.missing} missing tiles`
+                      : 'Download offline tiles'}
+                </button>
+              )}
+            </div>
+          )}
+        </section>
 
         <div className="trailmaker-imagery-source-picker">
           <label htmlFor="capture-imagery-source">Capture imagery source</label>
@@ -484,6 +1244,7 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
               setSelectedSourceId(event.target.value);
               setSelectedZoom(null);
               setRightsConfirmed(false);
+              setTileSource(null);
             }}
             disabled={capturing}
           >
@@ -538,6 +1299,14 @@ export const SatelliteFramingOverlay: FC<SatelliteFramingOverlayProps> = ({
                 />{' '}
                 I have the right to use this imagery.
               </label>
+              <button
+                type="button"
+                className="btn small"
+                disabled={!rightsConfirmed || tileSourceLoading}
+                onClick={() => void handleUseCustomTiledService()}
+              >
+                Use this cached service for tiled capture
+              </button>
             </>
           )}
         </div>

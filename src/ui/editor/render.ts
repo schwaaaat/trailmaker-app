@@ -8,6 +8,7 @@ import {
   type Feature,
   type FeatureId,
   type Px,
+  type Trail,
 } from '../../core/types';
 import type {
   CandidateSplitFocus,
@@ -29,10 +30,15 @@ export const SMOOTHING_MAX_ZOOM = 1.6;
 export interface RenderModel {
   /** Map bitmap in working-raster pixels, or null before a map is open. */
   readonly image: CanvasImageSource | null;
+  /** Virtual image dimensions when `image` is a downsampled tiled-map overview. */
+  readonly imageSize?: { readonly width: number; readonly height: number };
+  /** Source bitmap pixels per virtual image pixel. */
+  readonly imagePixelScale?: number;
   readonly features: readonly Feature[];
   readonly selectedFeatureId: string | null;
   /** Trail shift-selected to join with the selected one (T-209), or null. */
   readonly secondSelectedFeatureId: string | null;
+  readonly selectedTrailIds?: readonly FeatureId[];
   readonly draft: Draft | null;
   /** Last pointer position on the canvas (draft rubber band), or null. */
   readonly cursor: Screen | null;
@@ -52,9 +58,18 @@ export interface RenderModel {
   readonly simplifyPreview?: { readonly featureId: FeatureId; readonly pts: readonly Px[] } | null;
   readonly refinePreview?: RefinePreviewState | null;
   readonly connectPreview?: readonly Px[] | null;
+  readonly regionSelection?: { readonly from: Px; readonly to: Px } | null;
+  /** Optional local-only GPS dot and accuracy circle in map-pixel coordinates. */
+  readonly locationOverlay?: EditorLocationOverlay | null;
 }
 
 type Ctx = CanvasRenderingContext2D;
+
+/** A local GPS point and sampled accuracy boundary, already projected to level-0 map Px. */
+export interface EditorLocationOverlay {
+  readonly center: Px;
+  readonly accuracyBoundary: readonly Px[];
+}
 
 /**
  * Draw one frame. The canvas is sized cssW*dpr x cssH*dpr. `lines` draws the unselected
@@ -68,20 +83,27 @@ export function renderFrame(
   lines: ((ctx: Ctx) => void) | null = null,
   underlay: ((ctx: Ctx) => void) | null = null,
   mapOpacity = 1,
+  rasterOverlay: ((ctx: Ctx) => void) | null = null,
 ): void {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   if (!m.image) return;
   ctx.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.x, dpr * v.y);
-  ctx.imageSmoothingEnabled = v.s < SMOOTHING_MAX_ZOOM;
+  ctx.imageSmoothingEnabled = v.s * (m.imagePixelScale ?? 1) < SMOOTHING_MAX_ZOOM;
   underlay?.(ctx);
   ctx.shadowColor = 'rgba(0,0,0,.25)';
   ctx.shadowBlur = 12 / v.s;
   ctx.globalAlpha = Math.max(0, Math.min(1, mapOpacity));
-  ctx.drawImage(m.image, 0, 0);
+  if (m.imageSize) ctx.drawImage(m.image, 0, 0, m.imageSize.width, m.imageSize.height);
+  else ctx.drawImage(m.image, 0, 0);
   ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
+  if (rasterOverlay) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, mapOpacity));
+    rasterOverlay(ctx);
+    ctx.globalAlpha = 1;
+  }
 
   const editId = m.draft?.editId ?? null;
   const sel = m.features.find((f) => f.id === m.selectedFeatureId && f.id !== editId);
@@ -111,6 +133,11 @@ export function renderFrame(
       f.id === m.secondSelectedFeatureId && f.kind === 'trail' && f.id !== editId,
   );
   if (second) drawJoinCandidate(ctx, v, second);
+  const selectedTrails = new Set(m.selectedTrailIds ?? []);
+  for (const feature of m.features) {
+    if (feature.kind === 'trail' && selectedTrails.has(feature.id))
+      drawJoinCandidate(ctx, v, feature);
+  }
   for (const f of m.features) {
     if (f.kind === 'poi' && f.id !== editId && f !== sel) drawFeature(ctx, v, f, false);
   }
@@ -118,11 +145,57 @@ export function renderFrame(
   if (m.candidates) drawCandidates(ctx, v, m.candidates, m.focusedCandidateSplit ?? null);
   if (m.draft) drawDraft(ctx, v, m.draft, m.cursor);
   if (m.connectPreview?.length) drawConnectPreview(ctx, v, m.connectPreview);
+  if (m.regionSelection) drawRegionSelection(ctx, v, m.regionSelection.from, m.regionSelection.to);
   m.anchors.forEach((a, i) =>
     drawPin(ctx, v, a, i, a.id === m.selectedAnchorId, m.isOutlier(a.id)),
   );
   if (m.focusedVertex) drawVertexFocus(ctx, v, m.features, m.focusedVertex);
   if (m.centerCrosshair) drawCenterCrosshair(ctx, ctx.canvas.width / dpr, ctx.canvas.height / dpr);
+  if (m.locationOverlay) drawLocationOverlay(ctx, v, m.locationOverlay);
+}
+
+function drawLocationOverlay(ctx: Ctx, v: View, overlay: EditorLocationOverlay): void {
+  if (overlay.accuracyBoundary.length >= 3) {
+    const [firstX, firstY] = scr(v, overlay.accuracyBoundary[0]!);
+    ctx.beginPath();
+    ctx.moveTo(firstX, firstY);
+    for (const point of overlay.accuracyBoundary.slice(1)) {
+      const [x, y] = scr(v, point);
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 105, 180, 0.16)';
+    ctx.strokeStyle = '#0069b4';
+    ctx.lineWidth = 2;
+    ctx.fill();
+    ctx.stroke();
+  }
+  const [x, y] = scr(v, overlay.center);
+  ctx.beginPath();
+  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.fillStyle = '#0069b4';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+}
+
+function drawRegionSelection(ctx: Ctx, v: View, from: Px, to: Px): void {
+  const [x0, y0] = scr(v, from);
+  const [x1, y1] = scr(v, to);
+  ctx.save();
+  ctx.fillStyle = 'rgba(35, 120, 170, .14)';
+  ctx.strokeStyle = '#176b91';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#176b91';
+  ctx.beginPath();
+  ctx.arc(x0, y0, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawRefinePreview(ctx: Ctx, v: View, preview: RefinePreviewState): void {
@@ -360,7 +433,117 @@ function drawFeature(
       const [a, b] = scr(v, mid);
       label(ctx, f.name, a + 10, b - 10, true);
     }
+    if (f.kind === 'trail' && f.route) {
+      drawRouteDecorations(ctx, v, f, pts);
+    }
   }
+}
+
+function drawRouteDecorations(ctx: Ctx, v: View, f: Trail, pts: readonly Px[]): void {
+  if (!f.route || pts.length < 2) return;
+
+  // Directional arrows along path segments pointing from pts[i] to pts[i+1]
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, ay] = scr(v, pts[i]!);
+    const [bx, by] = scr(v, pts[i + 1]!);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (len < 22) continue;
+    const angle = Math.atan2(dy, dx);
+    const count = len > 120 ? Math.floor(len / 80) : 1;
+    for (let k = 1; k <= count; k++) {
+      const t = k / (count + 1);
+      drawArrowhead(ctx, ax + dx * t, ay + dy * t, angle);
+    }
+  }
+
+  // Badges and endpoint vertex accents
+  const [x0, y0] = scr(v, pts[0]!);
+  if (f.route.kind === 'one-way') {
+    const [xEnd, yEnd] = scr(v, pts[pts.length - 1]!);
+    // Trailhead at start
+    ctx.beginPath();
+    ctx.arc(x0, y0, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#19A974';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    drawRouteBadge(ctx, 'Trailhead', x0, y0, '#19A974');
+
+    // End at last vertex
+    ctx.beginPath();
+    ctx.arc(xEnd, yEnd, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#B5352A';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    drawRouteBadge(ctx, 'End', xEnd, yEnd, '#B5352A');
+  } else if (f.route.kind === 'loop') {
+    // Closed loop start/end vertex
+    ctx.beginPath();
+    ctx.arc(x0, y0, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#19A974';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const dirLabel = f.route.direction === 'clockwise' ? 'Clockwise' : 'Counterclockwise';
+    drawRouteBadge(ctx, `Start/End · ${dirLabel}`, x0, y0, '#19A974');
+  }
+}
+
+function drawArrowhead(ctx: Ctx, x: number, y: number, angle: number, size = 6.5): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(size, 0);
+  ctx.lineTo(-size, -size * 0.65);
+  ctx.lineTo(-size * 0.35, 0);
+  ctx.lineTo(-size, size * 0.65);
+  ctx.closePath();
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawRouteBadge(
+  ctx: Ctx,
+  text: string,
+  x: number,
+  y: number,
+  bgColor: string,
+  textColor = '#ffffff',
+): void {
+  ctx.font = `700 11px ${FONT}`;
+  const w = ctx.measureText(text).width;
+  const h = 18;
+  const pad = 6;
+  const bw = w + pad * 2;
+  const bx = x - bw / 2;
+  const by = y - h - 7;
+
+  ctx.fillStyle = bgColor;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, h, 4);
+  ctx.fill();
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = textColor;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, by + h / 2 + 0.5);
+  ctx.textAlign = 'start';
+  ctx.textBaseline = 'alphabetic';
 }
 
 function label(ctx: Ctx, text: string, x: number, y: number, strong: boolean): void {

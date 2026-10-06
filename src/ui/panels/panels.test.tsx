@@ -6,8 +6,10 @@ import type {
   Feature,
   FitResult,
   GeoFit,
+  ImageId,
   KmzRequest,
   Project,
+  RasterImage,
   Trail,
 } from '../../core/types';
 import * as formatModule from '../../core/export/format';
@@ -41,6 +43,8 @@ import { BUSY_AFTER_MS, ExportPanel, HINT_IDLE_MS, exportSummary } from './Expor
 import { FeaturesPanel, LIST_BATCH, LIST_FIRST } from './FeaturesPanel';
 import { fitMessage, fmtRes } from './fit-message';
 import { TracePanel } from './TracePanel';
+import * as editorStageModule from '../editor/EditorStage';
+import * as traceActionsModule from './trace-actions';
 import { ConnectPanel } from './ConnectPanel';
 import { Toolbar } from '../editor/Toolbar';
 
@@ -141,6 +145,27 @@ const poi: Feature = {
 
 function open(p: Project) {
   openSession(makeSession(p));
+}
+
+function openTiled(p: Project) {
+  const session = makeSession(p);
+  openSession({
+    ...session,
+    map: {
+      ...session.map,
+      tiles: {
+        levels: [{ level: 0, width: p.image.width, height: p.image.height, cols: 4, rows: 4 }],
+        tileSize: 256,
+        overviewScale: 0.5,
+        getTileBitmap: async () => null,
+        readRegion: async ({ width, height }) => ({
+          width,
+          height,
+          data: new Uint8ClampedArray(width * height * 4),
+        }),
+      },
+    },
+  });
 }
 
 beforeEach(async () => {
@@ -558,6 +583,184 @@ describe('FeaturesPanel', () => {
     expect(proj().features[0]!.name).toBe('Ridge');
   });
 
+  it('classifies a trail as one-way and swaps start/end (T-334)', () => {
+    open(makeProject({ features: [trail] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('f1'));
+
+    const routeSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Route type"]')!;
+    expect(routeSelect).toBeTruthy();
+    expect(routeSelect.value).toBe('');
+
+    act(() => {
+      routeSelect.value = 'one-way';
+      routeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const p = proj();
+    const f = p.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.route).toStrictEqual({ kind: 'one-way' });
+
+    const swapBtn = byText('Swap start and end')!;
+    expect(swapBtn).toBeTruthy();
+    click(swapBtn);
+
+    const p2 = proj();
+    const f2 = p2.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f2.pts[0]).toStrictEqual([900, 100]);
+    expect(f2.pts.at(-1)).toStrictEqual([100, 100]);
+  });
+
+  it('classifies a trail as a loop, toggles direction, and rotates start point (T-334)', () => {
+    const closedTrail: Feature = {
+      ...trail,
+      id: 'loop1',
+      pts: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 0],
+      ],
+    };
+    open(makeProject({ features: [closedTrail] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('loop1'));
+
+    const routeSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Route type"]')!;
+    act(() => {
+      routeSelect.value = 'loop';
+      routeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const p = proj();
+    const f = p.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.route?.kind).toBe('loop');
+    expect(f.route && 'direction' in f.route ? f.route.direction : null).toBe('clockwise');
+
+    const dirSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Loop direction"]')!;
+    expect(dirSelect).toBeTruthy();
+    act(() => {
+      dirSelect.value = 'counterclockwise';
+      dirSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const pDir = proj();
+    const fDir = pDir.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(fDir.route).toStrictEqual({ kind: 'loop', direction: 'counterclockwise' });
+
+    const startSelect = host.querySelector<HTMLSelectElement>(
+      'select[aria-label="Loop start point"]',
+    )!;
+    expect(startSelect).toBeTruthy();
+    act(() => {
+      startSelect.value = '1';
+      startSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const pRot = proj();
+    const fRot = pRot.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(fRot.pts[0]).toStrictEqual([100, 100]);
+    expect(fRot.pts.at(-1)).toStrictEqual([100, 100]);
+  });
+
+  it('refuses to mark open trail as loop when ends are too far apart (T-334)', () => {
+    const openTrail: Feature = {
+      ...trail,
+      id: 'open1',
+      pts: [
+        [0, 0],
+        [100, 50],
+        [200, 200],
+      ],
+    };
+    open(makeProject({ features: [openTrail] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('open1'));
+
+    const routeSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Route type"]')!;
+    act(() => {
+      routeSelect.value = 'loop';
+      routeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(st().toast?.message).toContain('Trail ends are too far apart');
+    const f = proj().features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.route).toBeUndefined();
+  });
+
+  it('classifies a counterclockwise loop naturally as counterclockwise (T-334)', () => {
+    const ccwTrail: Feature = {
+      ...trail,
+      id: 'loop-ccw',
+      pts: [
+        [0, 0],
+        [0, 100],
+        [100, 100],
+        [0, 0],
+      ],
+    };
+    open(makeProject({ features: [ccwTrail] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('loop-ccw'));
+
+    const routeSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Route type"]')!;
+    act(() => {
+      routeSelect.value = 'loop';
+      routeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const p = proj();
+    const f = p.features[0] as Extract<Feature, { kind: 'trail' }>;
+    expect(f.route).toStrictEqual({ kind: 'loop', direction: 'counterclockwise' });
+  });
+
+  it('uses zoom-aware snap tolerance to close or refuse loops depending on editor view scale (T-334)', () => {
+    // Endpoints are [0,0] and [0, 14], exactly 14 px apart
+    const nearTrail: Feature = {
+      ...trail,
+      id: 'near1',
+      pts: [
+        [0, 0],
+        [100, 50],
+        [100, 100],
+        [0, 14],
+      ],
+    };
+
+    open(makeProject({ features: [nearTrail] }));
+    render(<FeaturesPanel />);
+    act(() => selectFeature('near1'));
+
+    const routeSelect = host.querySelector<HTMLSelectElement>('select[aria-label="Route type"]')!;
+    act(() => {
+      routeSelect.value = 'loop';
+      routeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(st().toast?.message).toContain(
+      'Trail ends are too far apart (14.0 px) to close into a loop (must be within snap tolerance of 8.0 px).',
+    );
+    expect(
+      proj().features[0]!.kind === 'trail' &&
+        (proj().features[0] as Extract<Feature, { kind: 'trail' }>).route,
+    ).toBeUndefined();
+
+    const editorStub = {
+      view: { s: 0.2 },
+    } as unknown as NonNullable<ReturnType<typeof editorStageModule.currentEditor>>;
+    const editorSpy = vi.spyOn(editorStageModule, 'currentEditor').mockReturnValue(editorStub);
+
+    try {
+      act(() => {
+        routeSelect.value = 'loop';
+        routeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      const f = proj().features[0] as Extract<Feature, { kind: 'trail' }>;
+      expect(f.route?.kind).toBe('loop');
+      expect(f.pts[0]).toStrictEqual([0, 0]);
+      expect(f.pts.at(-1)).toStrictEqual([0, 0]);
+    } finally {
+      editorSpy.mockRestore();
+    }
+  });
+
   it('shows simplify control for selected trail with preview, smooth, and single-step undo (T-222)', async () => {
     const noisyTrail: Feature = {
       kind: 'trail',
@@ -671,6 +874,100 @@ describe('FeaturesPanel', () => {
         [100, 98],
         [900, 100],
       ]);
+    } finally {
+      setWorkerForTests(null);
+    }
+  });
+
+  it('refines against sparse level -1 detail and maps its output back to map pixels (T-332)', async () => {
+    const loaded = new Map<ImageId, RasterImage>();
+    let imageCount = 0;
+    const fake = fakeWorker({
+      loadImage: async (raster) => {
+        const id = `refine-image-${++imageCount}` as ImageId;
+        loaded.set(id, raster);
+        return id;
+      },
+      refineTrail: async (request) => {
+        const hasDetail = loaded
+          .get(request.imageId)
+          ?.data.some((value, index) => index % 4 === 0 && value === 200);
+        return {
+          pts: hasDetail ? request.pts.map(([x, y]) => [x, y + 2] as const) : request.pts,
+          segments: [
+            {
+              from: 0,
+              to: request.pts.length - 1,
+              refined: Boolean(hasDetail),
+              confidence: hasDetail ? 0.95 : 0,
+            },
+          ],
+          ink: [200, 40, 40],
+          ms: 2,
+        };
+      },
+    });
+    setWorkerForTests(fake.api);
+    const readRegion = vi.fn(
+      async (rect: { x: number; y: number; width: number; height: number }, level: number) => {
+        const scale = 2 ** -level;
+        const width = Math.ceil(rect.width * scale);
+        const height = Math.ceil(rect.height * scale);
+        const data = new Uint8ClampedArray(width * height * 4);
+        if (level === -1) {
+          for (let i = 0; i < data.length; i += 4) data.set([200, 40, 40, 255], i);
+        }
+        return {
+          width,
+          height,
+          data,
+          ...(level === -1 ? { detailCoverage: new Uint8Array(width * height).fill(255) } : {}),
+        };
+      },
+    );
+    try {
+      const session = makeSession(makeProject({ features: [trail] }));
+      openSession({
+        ...session,
+        map: {
+          ...session.map,
+          tiles: {
+            levels: [
+              {
+                level: -1,
+                width: session.map.meta.width * 2,
+                height: session.map.meta.height * 2,
+                cols: 8,
+                rows: 7,
+              },
+              {
+                level: 0,
+                width: session.map.meta.width,
+                height: session.map.meta.height,
+                cols: 4,
+                rows: 4,
+              },
+            ],
+            tileSize: 256,
+            overviewScale: 0.5,
+            getTileBitmap: async () => null,
+            readRegion,
+          },
+        },
+      });
+      render(<FeaturesPanel />);
+      act(() => selectFeature('f1'));
+      click(byText('Refine to map image'));
+      await act(async () => jobsIdle());
+
+      expect(readRegion).toHaveBeenCalled();
+      expect(readRegion.mock.calls.map(([, level]) => level)).toStrictEqual(
+        readRegion.mock.calls.map(() => -1),
+      );
+      const request = fake.of('refineTrail')[0]!.args[0] as { corridorPx: number };
+      expect(request.corridorPx).toBe(24);
+      expect(st().refinePreview?.entries[0]?.parts[0]?.useRefined).toBe(true);
+      expect(st().refinePreview?.entries[0]?.parts[0]?.refinedPts[0]).toStrictEqual([100, 101]);
     } finally {
       setWorkerForTests(null);
     }
@@ -1005,6 +1302,41 @@ describe('TracePanel review (T-210)', () => {
     enabled: true,
     share: null,
     named: false,
+  });
+
+  it('keeps regional auto-trace tiled-only and exposes a keyboard-accessible current-view action', () => {
+    const region = { x: 25, y: 30, width: 200, height: 150 };
+    const editorStub = {
+      visibleMapRegion: region,
+      setRegionSelection: vi.fn(),
+    } as unknown as NonNullable<ReturnType<typeof editorStageModule.currentEditor>>;
+    const editorSpy = vi.spyOn(editorStageModule, 'currentEditor').mockReturnValue(editorStub);
+    const traceSpy = vi.spyOn(traceActionsModule, 'autoTraceRegion').mockResolvedValue();
+    try {
+      open(makeProject());
+      render(<TracePanel />);
+      expect(byText('Auto-trace a region')).toBeUndefined();
+
+      act(() => {
+        openTiled(makeProject());
+        appStore.setState({ regionTraceMode: true });
+      });
+      render(<TracePanel />);
+      const button = byText('Trace current view');
+      expect(button).toBeTruthy();
+      expect(button.getAttribute('aria-keyshortcuts')).toBe('V');
+      expect(host.textContent).toContain('Drag a rectangle on the map. Press Escape to cancel.');
+      expect(host.textContent).toContain(
+        'Press V or choose Trace current view to trace the visible map bounds.',
+      );
+      click(button);
+      expect(traceSpy).toHaveBeenCalledWith(region);
+      expect(editorStub.setRegionSelection).toHaveBeenCalledWith(null);
+      expect(st().regionTraceMode).toBe(false);
+    } finally {
+      traceSpy.mockRestore();
+      editorSpy.mockRestore();
+    }
   });
 
   it('"Join colors that continue each other" reflects and toggles the store default (on)', () => {
@@ -1440,6 +1772,48 @@ describe('ExportPanel', () => {
       expect(sent.kind === 'trail' && sent.ll.length).toBe(
         trail.kind === 'trail' ? trail.pts.length : 0,
       );
+    } finally {
+      setWorkerForTests(null);
+    }
+  });
+
+  it('uses tiledOverlayQuad tile math for KMZ export when map is tiled (T-331)', async () => {
+    const fake = fakeWorker({ buildKmz: async () => new Uint8Array([80, 75, 5, 6]) });
+    setWorkerForTests(fake.api);
+    try {
+      const baseProject = placed([trail, poi]);
+      const tiledProject: Project = {
+        ...baseProject,
+        image: {
+          ...baseProject.image,
+          source: {
+            kind: 'tiles',
+            sourceId: 'martin-county',
+            z: 20,
+            tileSize: 256,
+            origin: { x: 74400000, y: 112800000 },
+            boundary: [
+              [27.15, -80.16],
+              [27.15, -80.14],
+              [27.13, -80.14],
+              [27.13, -80.16],
+            ],
+            tileCount: 96 * 64,
+          },
+        },
+      };
+      open(tiledProject);
+      render(<ExportPanel />);
+      click(byLabel<HTMLButtonElement>('Download KMZ with map overlay'));
+      await act(async () => {
+        await jobsIdle();
+      });
+      const [req] = fake.of('buildKmz')[0]!.args as [KmzRequest];
+      expect(req.quad).toBeDefined();
+      expect(req.quad).toHaveLength(4);
+      const [sw] = req.quad!;
+      expect(sw[0]).toBeCloseTo(27.59, 1);
+      expect(sw[1]).toBeCloseTo(-80.22, 1);
     } finally {
       setWorkerForTests(null);
     }

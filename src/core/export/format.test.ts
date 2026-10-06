@@ -67,6 +67,28 @@ describe('featureDescription', () => {
     expect(featureDescription(TRAILHEAD, 'mi')).toBe('Shuttle stop 16');
     expect(featureDescription(TAP, 'mi')).toBe('');
   });
+
+  it('includes route classification and travel direction for classified trails', () => {
+    const oneWayTrail = { ...TRAIL, route: { kind: 'one-way' as const } };
+    expect(featureDescription(oneWayTrail, 'mi')).toBe(
+      'Steep granite steps.\nBring water.\nRoute: One-way\nLength: 0.77 mi',
+    );
+
+    const loopTrailCw = {
+      ...TRAIL,
+      notes: '',
+      route: { kind: 'loop' as const, direction: 'clockwise' as const },
+    };
+    expect(featureDescription(loopTrailCw, 'km')).toBe('Route: Loop (clockwise)\nLength: 1.23 km');
+
+    const loopTrailCcw = {
+      ...TRAIL,
+      route: { kind: 'loop' as const, direction: 'counterclockwise' as const },
+    };
+    expect(featureDescription(loopTrailCcw, 'mi')).toBe(
+      'Steep granite steps.\nBring water.\nRoute: Loop (counterclockwise)\nLength: 0.77 mi',
+    );
+  });
 });
 
 describe('xmlEscape', () => {

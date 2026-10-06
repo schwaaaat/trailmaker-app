@@ -8,6 +8,7 @@ import {
   OPTS,
   OVERLAY,
   POIS_ONLY,
+  TRAIL,
   TRAILS_ONLY,
   expectGolden,
 } from './__golden__/docs';
@@ -88,5 +89,31 @@ describe('toKml', () => {
     expect(kml).toContain('<color>ffCCBBAA</color>');
     // Invalid POI color falls back to the POI default #1F6FB2.
     expect(kml).toContain('<color>ffB26F1F</color>');
+  });
+
+  it('writes route metadata in ExtendedData and description for classified trails', () => {
+    const doc = {
+      name: 'Routes',
+      features: [
+        {
+          ...TRAIL,
+          id: 'one-way-1',
+          route: { kind: 'one-way' as const },
+        },
+        {
+          ...TRAIL,
+          id: 'loop-1',
+          route: { kind: 'loop' as const, direction: 'clockwise' as const },
+        },
+      ],
+    };
+    const kml = toKml(doc, OPTS, null);
+    expect(() => parseKml(kml)).not.toThrow();
+    expect(kml).toContain(
+      '<Placemark><name>Mist Trail &lt;&amp;&quot;&apos;&gt; \u{1F97E}</name><description>Steep granite steps.\nBring water.\nRoute: One-way\nLength: 0.77 mi</description><styleUrl>#s-one-way-1</styleUrl><ExtendedData><Data name="route"><value>one-way</value></Data></ExtendedData>',
+    );
+    expect(kml).toContain(
+      '<Placemark><name>Mist Trail &lt;&amp;&quot;&apos;&gt; \u{1F97E}</name><description>Steep granite steps.\nBring water.\nRoute: Loop (clockwise)\nLength: 0.77 mi</description><styleUrl>#s-loop-1</styleUrl><ExtendedData><Data name="route"><value>loop</value></Data><Data name="direction"><value>clockwise</value></Data></ExtendedData>',
+    );
   });
 });

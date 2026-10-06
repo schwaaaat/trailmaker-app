@@ -32,6 +32,12 @@ loaded, and installs as an app (PWA).
     `geoweb.martin.fl.us`). If you paste another ArcGIS imagery service, it goes to that server
     (for example `ca.dep.state.fl.us`). These servers receive only the framed area and image
     size; your map image and trails aren't sent.
+  - **Maximum detail** on a Martin County tiled map requests small 2048-pixel image cells from
+    the county's on-demand `/export` service. The area you draw, or the area around the editor
+    view when *Fill in maximum detail as I go* is on, is visible to that server. Fill-in starts off.
+    **Show my location** uses device GPS locally; if you enable both location and fill-in, the
+    nearby export requests reveal your approximate area to the county server. Your exact GPS fix
+    and trail data aren't uploaded.
   - **Place search** (a separate checkbox, off by default). It sends only the text you type to
     `nominatim.openstreetmap.org`.
 - The *Google Maps* link in the anchors step is an ordinary link that you choose to open.
@@ -76,10 +82,21 @@ trails automatically**: pick the trail colors, review the candidates, and accept
   optionally smoothing it. Endpoints and junctions don't move.
 - **Split and join**: select a point and press `S`, or right-click / long-press a point for its
   menu. **Join with…** joins two trails.
+- **Box selection and auto-join**: in Select mode, choose **Box select trails** and drag across
+  the trails you want. **Preview auto-join** shows the proposed chains before you apply them.
+  Only nearby ends join; ambiguous branches stay separate. One Undo restores the whole edit.
+- **Trailhead and direction**: select a trail and set **Route type** to **One-way** or **Loop**.
+  One-way routes mark their trailhead and opposite end; **Swap start and end** reverses travel.
+  A loop must already close, or have nearby ends that can snap together. Choose its start point
+  and **Loop direction** (clockwise or counterclockwise on the map). Badges and arrows show the
+  result. Split/join operations clear ambiguous labels and ask you to relabel.
 
 **5. Export.** In **Export**, choose **GPX** for Gaia GPS, AllTrails, CalTopo, OsmAnd or Garmin,
 **KML** or **KMZ with map overlay** for Google Earth, or **GeoJSON**. **Download all (.zip)**
 gives you every format. **Save project** writes a `.trailmaker` file you can reopen later.
+Route labels save in project format v4. Older projects still open; older app versions cannot open
+v4 projects. GPX/KML descriptions and KML/GeoJSON properties include route meaning, with geometry
+ordered from the marked trailhead.
 
 ![The export step with the traced trail](docs/screenshots/4-export.png)
 
@@ -111,6 +128,23 @@ pixel). Elsewhere, or where NAIP has no data, it falls back to the USGS imagery 
 - **Refine traced trails.** Select a trail and choose **Refine to map image**, or choose **Refine
   all trails**. Review the proposed sections before applying them; the edit is undoable. Refine
   reads your opened or captured map image, including when Esri is visible behind it.
+
+## New in v1.6
+
+- **Whole-park offline imagery.** On a compatible Martin County map, draw a park boundary in
+  **Start from satellite**, choose the z20 tiled download, and review the tile count, time, and
+  storage estimate before downloading. The map stays usable offline. You can save the tiles in a
+  `.trailmaker` project or reopen the project and download them again.
+- **Maximum detail where you need it.** On a downloaded Martin County map, open **Maximum detail
+  and location** in the Basemap tab. Draw a small boundary or use the current view, then review
+  the export count and choose **Download maximum detail**. The finer imagery appears as it arrives;
+  areas without it continue to show the base tiles. You can pause, resume, or delete just the
+  finer imagery.
+- **Fill in maximum detail as I go.** This optional switch fetches small areas around a zoomed-in editor
+  view, or around your GPS position when **Show my location** is on. It starts off, limits county
+  requests to one at a time and 60 per hour, and shows the remaining request budget. The GPS dot
+  and accuracy circle are drawn locally. **Show my location** also works with a georeferenced
+  single-image map without downloading maximum detail.
 
 ## Imagery sources and licenses
 

@@ -159,7 +159,7 @@ test('real worker smart-follow, scan, cancel, rerun and accept without a loader 
       sha256,
     };
     const project = {
-      version: 2 as const,
+      version: 4 as const,
       name: 'Solid fixture',
       image: meta,
       anchors: [],

@@ -3,11 +3,13 @@ import { parseGpx } from '../../io/gpx';
 import { clearActiveGpx, loadGpxBlob, setActiveGpx } from '../../io/gpxStorage';
 import { loadImageFile, isSupportedImage } from '../../io/image';
 import { loadPdfFile } from '../../io/pdf';
+import { restoreTiledProjectMap } from '../../io/tile-raster';
 import { sessionBridge } from '../../state/bridge';
 import { setBusy as storeSetBusy, showToast as storeShowToast } from '../../state/store';
 import type { LoadedMap, Session, SessionBridge } from '../contract';
 
-export const UNSUPPORTED_FILE_MESSAGE = 'That file type isn’t supported. Use PNG, JPG, WebP or PDF.';
+export const UNSUPPORTED_FILE_MESSAGE =
+  'That file type isn’t supported. Use PNG, JPG, WebP or PDF.';
 export const REPLACE_MAP_HINT_MESSAGE = 'Use “Open image or PDF” to replace the current map.';
 
 /** Formats a project name as a URL- and filename-safe slug. Matches prototype slug(). */
@@ -93,10 +95,12 @@ export async function openFileBlob(
     if (name.endsWith('.trailmaker')) {
       const buffer = await blobToArrayBuffer(file);
       const deserialize = options.deserializeProject ?? deserializeProjectAsync;
-      const { project, image, gpxBytes } = await deserialize(new Uint8Array(buffer));
+      const { project, image, gpxBytes, tiles } = await deserialize(new Uint8Array(buffer));
       const imageBlob = new Blob([image.bytes as unknown as BlobPart], { type: image.mimeType });
       let map: LoadedMap;
-      if (project.image.source.kind === 'pdf') {
+      if (project.image.source.kind === 'tiles') {
+        map = await restoreTiledProjectMap(project.image, imageBlob, tiles);
+      } else if (project.image.source.kind === 'pdf') {
         map = await loadPdfFile(imageBlob, project.image.fileName, project.image.source.page);
       } else {
         map = await loadImageFile(imageBlob, project.image.fileName);
@@ -125,7 +129,11 @@ export async function openFileBlob(
         clearActiveGpx();
       }
       bridge.openSession({ project, map });
-      showToast('Project opened');
+      showToast(
+        map.meta.source.kind === 'tiles' && !map.tiles
+          ? 'Project opened with its overview. To work offline at full detail, download the tiles again from Capture satellite.'
+          : 'Project opened',
+      );
       return true;
     }
 

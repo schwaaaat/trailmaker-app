@@ -38,7 +38,7 @@ async function openColorSwitch(page: Parameters<typeof openReadyApp>[0]) {
     };
     window.__trailmaker!.session.openSession({
       project: {
-        version: 2,
+        version: 4,
         name: 'Color switch',
         image: meta,
         anchors: [],

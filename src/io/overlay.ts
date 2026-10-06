@@ -12,10 +12,13 @@ export async function encodeOverlayJpeg(
   maxSide = 4096,
   quality = 0.86
 ): Promise<Uint8Array> {
-  const maxDim = Math.max(map.meta.width, map.meta.height);
+  const isTiled = map.meta.source.kind === 'tiles';
+  const targetW = isTiled ? map.display.width : map.meta.width;
+  const targetH = isTiled ? map.display.height : map.meta.height;
+  const maxDim = Math.max(targetW, targetH);
   const k = Math.min(1, maxSide / maxDim);
-  const w = Math.max(1, Math.round(map.meta.width * k));
-  const h = Math.max(1, Math.round(map.meta.height * k));
+  const w = Math.max(1, Math.round(targetW * k));
+  const h = Math.max(1, Math.round(targetH * k));
 
   // OffscreenCanvas (Worker or modern main thread)
   if (typeof OffscreenCanvas !== 'undefined') {

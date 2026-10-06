@@ -21,7 +21,7 @@ test('draw a three-point trail by hand, then undo and redo the exact project', a
     };
     window.__trailmaker!.session.openSession({
       project: {
-        version: 2,
+        version: 4,
         name: 'Manual trail',
         image: meta,
         anchors: [],

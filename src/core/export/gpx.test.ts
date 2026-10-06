@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateGpx } from '../../../tests/metrics/xml';
-import { ALL_DOCS, MIXED, ODD, OPTS, OPTS_KM, POIS_ONLY, expectGolden } from './__golden__/docs';
+import { ALL_DOCS, MIXED, ODD, OPTS, OPTS_KM, POIS_ONLY, TRAIL, expectGolden } from './__golden__/docs';
 import { gpxParts, toGpx } from './gpx';
 
 const trkpts = (gpx: string) =>
@@ -70,6 +70,28 @@ describe('toGpx', () => {
     const gpx = toGpx(POIS_ONLY, OPTS);
     expect(gpx).not.toContain('<trk>');
     expect(gpx.match(/<wpt /g)).toHaveLength(2);
+  });
+
+  it('includes route classification and travel direction in track descriptions', () => {
+    const doc = {
+      name: 'Routes',
+      features: [
+        {
+          ...TRAIL,
+          id: 'one-way-1',
+          route: { kind: 'one-way' as const },
+        },
+        {
+          ...TRAIL,
+          id: 'loop-1',
+          route: { kind: 'loop' as const, direction: 'clockwise' as const },
+        },
+      ],
+    };
+    const gpx = toGpx(doc, OPTS);
+    expect(validateGpx(gpx)).toBe(true);
+    expect(gpx).toContain('<desc>Steep granite steps.\nBring water.\nRoute: One-way\nLength: 0.77 mi</desc>');
+    expect(gpx).toContain('<desc>Steep granite steps.\nBring water.\nRoute: Loop (clockwise)\nLength: 0.77 mi</desc>');
   });
 });
 

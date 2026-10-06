@@ -8,8 +8,9 @@ import {
   type ColorScanResult,
   type ImageId,
   type JobProgress,
+  MAX_WORKING_SIDE,
 } from '../../core/types';
-import type { LoadedMap } from '../contract';
+import type { LoadedMap, TileLevel } from '../contract';
 import { acceptCandidates, addChips } from '../../state/commands';
 import {
   appStore,
@@ -25,6 +26,7 @@ import {
   call,
   cancelJob,
   imageFor,
+  loadPixelRegion,
   isCancelled,
   isReported,
   jobDone,
@@ -57,6 +59,25 @@ export function confidenceBand(confidence: number | null): ConfidenceBand | null
 
 /** Store progress at most every PROGRESS_MS so a chatty worker can't flood React. */
 const PROGRESS_MS = 100;
+
+/** Choose the finest pyramid level where the selected region stays within the worker pixel budget. */
+export function autoTraceLevelForRegion(
+  levels: readonly TileLevel[],
+  region: { readonly width: number; readonly height: number },
+): number {
+  const maxArea = MAX_WORKING_SIDE * MAX_WORKING_SIDE;
+  if (region.width * region.height <= maxArea || levels.length === 0) return 0;
+
+  const fitting = [...levels]
+    .sort((a, b) => a.level - b.level)
+    .find((candidate) => {
+      const scale = 2 ** candidate.level;
+      const width = Math.min(Math.ceil(region.width / scale), candidate.width);
+      const height = Math.min(Math.ceil(region.height / scale), candidate.height);
+      return width * height <= maxArea;
+    });
+  return fitting?.level ?? Math.max(...levels.map((level) => level.level));
+}
 
 function progressReporter(
   jobId: string,
@@ -157,9 +178,23 @@ export function findTrails(): Promise<void> {
   return track(findTrailsNow());
 }
 
-async function findTrailsNow(): Promise<void> {
+export function autoTraceRegion(rect: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): Promise<void> {
+  return track(findTrailsNow(rect));
+}
+
+async function findTrailsNow(region?: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): Promise<void> {
   const map = state().session?.map;
-  if (!map || state().job) return;
+  if (!map || state().job || (region && !map.tiles)) return;
   if (state().draft) await finishDraft();
   try {
     let chips = project()?.autoTrace.chips.filter((c) => c.enabled) ?? [];
@@ -179,8 +214,27 @@ async function findTrailsNow(): Promise<void> {
     }
     const p = project();
     if (!p) return;
-    const id = await imageFor(map);
-    const { width, height } = p.image;
+    const overviewScale = map.tiles?.overviewScale ?? 1;
+    const imageWidth = map.tiles ? map.raster.width : p.image.width;
+    const imageHeight = map.tiles ? map.raster.height : p.image.height;
+    let imageId: ImageId;
+    let toMap: (point: readonly [number, number]) => readonly [number, number];
+    let workerScale = 1;
+    let temporary: Awaited<ReturnType<typeof loadPixelRegion>> | null = null;
+    if (region && map.tiles) {
+      const level = autoTraceLevelForRegion(map.tiles.levels, region);
+      temporary = await loadPixelRegion(map, region, level);
+      imageId = temporary.imageId;
+      toMap = temporary.toMap;
+      workerScale = 2 ** level;
+    } else {
+      imageId = await imageFor(map);
+      workerScale = map.tiles ? 1 / overviewScale : 1;
+      toMap = map.tiles ? ([x, y]) => [x / overviewScale, y / overviewScale] : (point) => point;
+    }
+    const { width, height } = region
+      ? { width: region.width / workerScale, height: region.height / workerScale }
+      : { width: imageWidth, height: imageHeight };
     const jobId = startJob(map);
     const names = new Map(chips.map((c, i) => [c.id, { name: c.name, i }] as const));
     const label = (prog: JobProgress) => {
@@ -196,10 +250,10 @@ async function findTrailsNow(): Promise<void> {
       found = await call((api) =>
         api.autoTrace(
           {
-            imageId: id,
+            imageId,
             colors: chips.map((c) => ({ chipId: c.id, rgb: c.rgb })),
             tolerance: p.trace.tolerance,
-            gapPx: p.autoTrace.gapPx,
+            gapPx: p.autoTrace.gapPx / workerScale,
             minLengthPx: (p.autoTrace.minLengthPct / 100) * Math.max(width, height),
             mergeAcrossColors: state().mergeAcrossColors,
           },
@@ -209,6 +263,7 @@ async function findTrailsNow(): Promise<void> {
     } finally {
       jobDone(jobId);
       if (state().job?.jobId === jobId) appStore.setState({ job: null });
+      if (temporary) await temporary.release();
     }
     if (!stillOn(map)) return;
     if (!found.length) {
@@ -219,6 +274,11 @@ async function findTrailsNow(): Promise<void> {
       );
       return;
     }
+    found = found.map((candidate) => ({
+      ...candidate,
+      pts: candidate.pts.map(toMap),
+      lengthPx: candidate.lengthPx * workerScale,
+    }));
     const byChip = new Map<string, AutoTraceCandidate[]>();
     for (const c of found) byChip.set(c.chipId, [...(byChip.get(c.chipId) ?? []), c]);
     const chipById = new Map(chips.map((c) => [c.id, c]));

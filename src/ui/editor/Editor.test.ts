@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Feature, Project } from '../../core/types';
 import { makeProject, makeSession } from '../../state/fixtures.test.helper';
 import { appStore, openSession, selectFeature, setTool } from '../../state/store';
+import type { LoadedMap } from '../contract';
 import { Editor, type EditorEvents } from './Editor';
 import { toImg, toScr } from './view';
 
@@ -53,6 +54,78 @@ function record(ed: Editor) {
   return log;
 }
 
+function bitmap(): ImageBitmap {
+  return { width: 256, height: 256, close: vi.fn() } as unknown as ImageBitmap;
+}
+
+function makeDetailMap(isDetailAvailable: () => boolean) {
+  const session = makeSession();
+  const sources = new Map<string, ImageBitmap>();
+  let notify: (rect: { x: number; y: number; width: number; height: number }) => void = () => {};
+  const unsubscribe = vi.fn();
+  const getTileBitmap = vi.fn(async (level: number, col: number, row: number) => {
+    if (level === -1 && !isDetailAvailable()) return null;
+    const key = `${level}/${col}/${row}`;
+    let source = sources.get(key);
+    if (!source) {
+      source = bitmap();
+      sources.set(key, source);
+    }
+    return source;
+  });
+  const map: LoadedMap = {
+    ...session.map,
+    tiles: {
+      levels: [
+        { level: -1, width: 2000, height: 1600, cols: 8, rows: 7 },
+        { level: 0, width: 1000, height: 800, cols: 4, rows: 4 },
+      ],
+      tileSize: 256,
+      overviewScale: 0.1,
+      getTileBitmap,
+      readRegion: async ({ width, height }) => ({
+        width,
+        height,
+        data: new Uint8ClampedArray(width * height * 4),
+      }),
+      subscribeDetailChanged: (listener) => {
+        notify = listener;
+        return unsubscribe;
+      },
+    },
+  };
+  return {
+    map,
+    session,
+    sources,
+    getTileBitmap,
+    unsubscribe,
+    notify: (rect: { x: number; y: number; width: number; height: number }) => notify(rect),
+  };
+}
+
+function drawTiledMap(ed: Editor, map: LoadedMap, ctx: CanvasRenderingContext2D): void {
+  (
+    ed as unknown as { drawTiledMap(ctx: CanvasRenderingContext2D, map: LoadedMap): void }
+  ).drawTiledMap(ctx, map);
+}
+
+function tiledRequests(ed: Editor) {
+  return ed as unknown as {
+    tiledTiles: { get(key: string): ImageBitmap | undefined };
+    missingTiles: Set<string>;
+    pendingTiles: Map<string, unknown>;
+  };
+}
+
+function tileContext() {
+  return {
+    save: vi.fn(),
+    restore: vi.fn(),
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D & { drawImage: ReturnType<typeof vi.fn> };
+}
+
 const trail: Feature = {
   kind: 'trail',
   id: 'f1',
@@ -98,6 +171,207 @@ describe('Editor', () => {
     // Image centre at canvas centre.
     const [cx, cy] = toScr(ed.view, [500, 400]);
     expect([cx, cy].map((v) => +v.toFixed(9))).toStrictEqual([250, 200]);
+  });
+
+  it('reports center and zoom for the detail focus controller', () => {
+    const viewChanges = vi.fn();
+    ed.on('view', viewChanges);
+    expect(ed.detailFocus.center).toEqual(ed.centerPointerAt().px);
+    expect(ed.detailFocus.scale).toBe(ed.view.s);
+
+    ed.zoomBy(2);
+    expect(viewChanges).toHaveBeenCalledOnce();
+    expect(ed.detailFocus.center).toEqual(ed.centerPointerAt().px);
+    expect(ed.detailFocus.scale).toBe(ed.view.s);
+  });
+
+  it('passes a projected local location overlay to the renderer and clears it on map change', () => {
+    const overlay = {
+      center: [400, 300] as const,
+      accuracyBoundary: [
+        [390, 300],
+        [400, 290],
+        [410, 300],
+        [400, 310],
+      ] as const,
+    };
+    ed.setLocationOverlay(overlay);
+    const editorModel = (ed as unknown as { model(): { locationOverlay: unknown } }).model();
+    expect(editorModel.locationOverlay).toBe(overlay);
+
+    open(makeProject({ image: { ...makeProject().image, width: 900, height: 700 } }));
+    expect(
+      (ed as unknown as { model(): { locationOverlay: unknown } }).model().locationOverlay,
+    ).toBe(null);
+  });
+
+  it('falls back to the overview and clears pending state if a shared tile closes before cloning', async () => {
+    const session = makeSession();
+    const sharedBitmap = {} as ImageBitmap;
+    const getTileBitmap = vi.fn(async () => sharedBitmap);
+    const map: LoadedMap = {
+      ...session.map,
+      tiles: {
+        levels: [{ level: 0, width: 1000, height: 800, cols: 1, rows: 1 }],
+        tileSize: 1000,
+        overviewScale: 0.1,
+        getTileBitmap,
+        readRegion: async ({ width, height }) => ({
+          width,
+          height,
+          data: new Uint8ClampedArray(width * height * 4),
+        }),
+      },
+    };
+    openSession({ ...session, map });
+    const cloneBitmap = vi
+      .fn()
+      .mockRejectedValue(new DOMException('The shared bitmap is closed', 'InvalidStateError'));
+    vi.stubGlobal('createImageBitmap', cloneBitmap);
+
+    try {
+      const drawTiledMap = (
+        ed as unknown as {
+          drawTiledMap(ctx: CanvasRenderingContext2D, map: LoadedMap): void;
+        }
+      ).drawTiledMap.bind(ed);
+      drawTiledMap({} as CanvasRenderingContext2D, map);
+
+      await vi.waitFor(() => expect(cloneBitmap).toHaveBeenCalledOnce());
+      const requests = ed as unknown as {
+        pendingTiles: Map<string, LoadedMap>;
+        missingTiles: Set<string>;
+      };
+      await vi.waitFor(() => expect(requests.pendingTiles.has('0/0/0')).toBe(false));
+      expect(requests.missingTiles.has('0/0/0')).toBe(true);
+
+      // Missing marks this tile as using the overview fallback and avoids an immediate retry loop.
+      drawTiledMap({} as CanvasRenderingContext2D, map);
+      expect(getTileBitmap).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reloads a missing detail tile when stored detail changes', async () => {
+    let detailAvailable = false;
+    const detail = makeDetailMap(() => detailAvailable);
+    openSession({ ...detail.session, map: detail.map });
+    vi.stubGlobal('createImageBitmap', async (source: ImageBitmap) => source);
+    const ctx = tileContext();
+    ed.zoomBy(16);
+    const key = '-1/3/3';
+
+    try {
+      drawTiledMap(ed, detail.map, ctx);
+      await vi.waitFor(() => expect(tiledRequests(ed).missingTiles.has(key)).toBe(true));
+
+      detailAvailable = true;
+      detail.notify({ x: 384, y: 384, width: 128, height: 128 });
+      expect(tiledRequests(ed).missingTiles.has(key)).toBe(false);
+      drawTiledMap(ed, detail.map, ctx);
+      await vi.waitFor(() => expect(tiledRequests(ed).tiledTiles.get(key)).toBeDefined());
+
+      drawTiledMap(ed, detail.map, ctx);
+      expect(ctx.drawImage.mock.calls.some(([source]) => source === detail.sources.get(key))).toBe(
+        true,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let a retired detail lookup overwrite its replacement result', async () => {
+    const detail = makeDetailMap(() => true);
+    const pendingTarget: Array<(result: ImageBitmap | null) => void> = [];
+    const originalGetTileBitmap = detail.getTileBitmap;
+    const getTileBitmap = vi.fn((level: number, col: number, row: number) => {
+      if (level === -1 && col === 3 && row === 3) {
+        return new Promise<ImageBitmap | null>((resolve) => pendingTarget.push(resolve));
+      }
+      if (level === -1) return Promise.resolve(null);
+      return originalGetTileBitmap(level, col, row);
+    });
+    const map: LoadedMap = {
+      ...detail.map,
+      tiles: { ...detail.map.tiles!, getTileBitmap },
+    };
+    openSession({ ...detail.session, map });
+    vi.stubGlobal('createImageBitmap', async (source: ImageBitmap) => source);
+    const ctx = tileContext();
+    ed.zoomBy(16);
+    const key = '-1/3/3';
+
+    try {
+      drawTiledMap(ed, map, ctx);
+      expect(pendingTarget).toHaveLength(1);
+
+      detail.notify({ x: 384, y: 384, width: 128, height: 128 });
+      drawTiledMap(ed, map, ctx);
+      expect(pendingTarget).toHaveLength(2);
+      const replacement = bitmap();
+      pendingTarget[1]!(replacement);
+      await vi.waitFor(() => expect(tiledRequests(ed).tiledTiles.get(key)).toBe(replacement));
+
+      pendingTarget[0]!(null);
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.waitFor(() => expect(tiledRequests(ed).pendingTiles.has(key)).toBe(false));
+      expect(tiledRequests(ed).missingTiles.has(key)).toBe(false);
+      expect(tiledRequests(ed).tiledTiles.get(key)).toBe(replacement);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('drops deleted detail and draws the cached level-0 fallback', async () => {
+    let detailAvailable = true;
+    const detail = makeDetailMap(() => detailAvailable);
+    openSession({ ...detail.session, map: detail.map });
+    vi.stubGlobal('createImageBitmap', async (source: ImageBitmap) => source);
+    const ctx = tileContext();
+    ed.zoomBy(16);
+    const detailKey = '-1/3/3';
+    const overviewKey = '0/1/1';
+
+    try {
+      drawTiledMap(ed, detail.map, ctx);
+      await vi.waitFor(() => expect(tiledRequests(ed).tiledTiles.get(detailKey)).toBeDefined());
+      await vi.waitFor(() => expect(tiledRequests(ed).tiledTiles.get(overviewKey)).toBeDefined());
+
+      detailAvailable = false;
+      detail.notify({ x: 384, y: 384, width: 128, height: 128 });
+      expect(tiledRequests(ed).tiledTiles.get(detailKey)).toBeUndefined();
+      drawTiledMap(ed, detail.map, ctx);
+      await vi.waitFor(() => expect(tiledRequests(ed).missingTiles.has(detailKey)).toBe(true));
+
+      ctx.drawImage.mockClear();
+      drawTiledMap(ed, detail.map, ctx);
+      expect(
+        ctx.drawImage.mock.calls.some(([source]) => source === detail.sources.get(overviewKey)),
+      ).toBe(true);
+      expect(detail.getTileBitmap).toHaveBeenCalledWith(0, 1, 1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('unsubscribes detail changes on map replacement and editor destruction', () => {
+    const first = makeDetailMap(() => false);
+    openSession({ ...first.session, map: first.map });
+    expect(first.unsubscribe).not.toHaveBeenCalled();
+    expect(first.map.tiles?.subscribeDetailChanged).toBeDefined();
+
+    const withoutTiles = makeSession();
+    openSession(withoutTiles);
+    expect(first.unsubscribe).toHaveBeenCalledOnce();
+
+    const second = makeDetailMap(() => false);
+    openSession({ ...second.session, map: second.map });
+    ed.destroy();
+    expect(second.unsubscribe).toHaveBeenCalledOnce();
+    ed = new Editor();
+    ed.mount(canvas);
   });
 
   it('reports a click (within the 4 px threshold) with image px and no target', () => {

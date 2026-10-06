@@ -170,6 +170,102 @@ describe('serializeProject & deserializeProject round-trip', () => {
     });
   });
 
+  test('round-trips directed trail routes (one-way and loop) in v4', () => {
+    const img = createSampleMapImage();
+    const proj: Project = {
+      version: PROJECT_VERSION,
+      name: 'Directed Routes',
+      image: img,
+      anchors: [],
+      fitMethod: 'auto',
+      features: [
+        {
+          id: 'f1',
+          name: 'One-Way Trail',
+          color: DEFAULT_COLORS.trail,
+          notes: '',
+          kind: 'trail',
+          pts: [
+            [0, 0],
+            [10, 10],
+          ],
+          ink: null,
+          route: { kind: 'one-way' },
+        },
+        {
+          id: 'f2',
+          name: 'Loop Trail',
+          color: DEFAULT_COLORS.trail,
+          notes: '',
+          kind: 'trail',
+          pts: [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 0],
+          ],
+          ink: null,
+          route: { kind: 'loop', direction: 'clockwise' },
+        },
+      ],
+      units: 'mi',
+      trace: { smartFollow: true, tolerance: 60, ink: null },
+      autoTrace: { chips: [], gapPx: 10, minLengthPct: 4 },
+      seq: 3,
+      updatedAt: '2026-10-05T12:00:00.000Z',
+    };
+    const zip = serializeProject(proj, { bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/png' });
+    const { project } = deserializeProject(zip);
+    expect(project.version).toBe(4);
+    expect(project.features).toEqual(proj.features);
+  });
+
+  test('round-trips an embedded tile bundle alongside the overview image', async () => {
+    const image = createSampleMapImage({
+      source: {
+        kind: 'tiles',
+        sourceId: 'martin-county',
+        z: 20,
+        tileSize: 256,
+        origin: { x: 1000, y: 2000 },
+        boundary: [[27.1, -80.2], [27.2, -80.2], [27.2, -80.1]],
+        tileCount: 1,
+      },
+    });
+    const project = newProject(image, 'Tiled map', '2026-10-04T00:00:00.000Z');
+    const tile = { level: 0, col: 0, row: 0, bytes: new Uint8Array([9, 8, 7]), mimeType: 'image/jpeg' };
+    const detailTile = {
+      level: -1,
+      col: 1,
+      row: 2,
+      bytes: new Uint8Array([6, 5, 4]),
+      mimeType: 'image/jpeg',
+    };
+    const archive = serializeProject(
+      project,
+      { bytes: new Uint8Array([1, 2]), mimeType: 'image/jpeg' },
+      undefined,
+      [tile, detailTile],
+    );
+    const restored = deserializeProject(archive);
+    expect(restored.tiles).toHaveLength(2);
+    expect(restored.tiles).toEqual(expect.arrayContaining([tile, detailTile]));
+    expect(restored.project.image.source.kind).toBe('tiles');
+    const asyncArchive = await serializeProjectAsync(
+      project,
+      { bytes: new Uint8Array([1, 2]), mimeType: 'image/jpeg' },
+      undefined,
+      [tile, detailTile],
+    );
+    const asyncRestored = await deserializeProjectAsync(asyncArchive);
+    expect(asyncRestored.tiles).toHaveLength(2);
+    expect(asyncRestored.tiles).toEqual(expect.arrayContaining([tile, detailTile]));
+    const overviewOnly = deserializeProject(
+      serializeProject(project, { bytes: new Uint8Array([1, 2]), mimeType: 'image/jpeg' }),
+    );
+    expect(overviewOnly.tiles).toBeUndefined();
+  });
+
   test('round-trips with JPEG and WebP images', () => {
     const imgJpg = createSampleMapImage({
       source: { kind: 'image', mimeType: 'image/jpeg' },
@@ -539,6 +635,147 @@ describe('validateProject structural checks', () => {
         ],
       })
     ).toThrow('poi[0].poiType must be one of POI_TYPES');
+
+    // Trail with invalid route kind
+    expect(() =>
+      validateProject({
+        ...validBase(),
+        features: [
+          {
+            id: 'f4',
+            name: 'Bad Route',
+            color: '#000',
+            notes: '',
+            kind: 'trail',
+            pts: [
+              [0, 0],
+              [10, 10],
+            ],
+            ink: null,
+            route: { kind: 'invalid' as unknown as 'one-way' },
+          },
+        ],
+      })
+    ).toThrow('unknown trail[0].route.kind "invalid"');
+
+    // One-way trail that is closed
+    expect(() =>
+      validateProject({
+        ...validBase(),
+        features: [
+          {
+            id: 'f5',
+            name: 'Closed One-way',
+            color: '#000',
+            notes: '',
+            kind: 'trail',
+            pts: [
+              [0, 0],
+              [10, 0],
+              [10, 10],
+              [0, 0],
+            ],
+            ink: null,
+            route: { kind: 'one-way' },
+          },
+        ],
+      })
+    ).toThrow('trail[0] has one-way route but is closed or degenerate');
+
+    // Loop trail that is open
+    expect(() =>
+      validateProject({
+        ...validBase(),
+        features: [
+          {
+            id: 'f6',
+            name: 'Open Loop',
+            color: '#000',
+            notes: '',
+            kind: 'trail',
+            pts: [
+              [0, 0],
+              [10, 0],
+              [10, 10],
+            ],
+            ink: null,
+            route: { kind: 'loop', direction: 'clockwise' },
+          },
+        ],
+      })
+    ).toThrow('trail[0] loop must be closed with at least 3 distinct vertices');
+
+    // Loop trail with invalid direction
+    expect(() =>
+      validateProject({
+        ...validBase(),
+        features: [
+          {
+            id: 'f7',
+            name: 'Bad Dir Loop',
+            color: '#000',
+            notes: '',
+            kind: 'trail',
+            pts: [
+              [0, 0],
+              [10, 0],
+              [10, 10],
+              [0, 0],
+            ],
+            ink: null,
+            route: { kind: 'loop', direction: 'sideways' as unknown as 'clockwise' },
+          },
+        ],
+      })
+    ).toThrow("trail[0].route.direction must be 'clockwise' or 'counterclockwise'");
+
+    // Loop trail with mismatched winding (geometry is clockwise, direction says counterclockwise)
+    expect(() =>
+      validateProject({
+        ...validBase(),
+        features: [
+          {
+            id: 'f8',
+            name: 'Mismatched Winding Loop',
+            color: '#000',
+            notes: '',
+            kind: 'trail',
+            pts: [
+              [0, 0],
+              [10, 0],
+              [10, 10],
+              [0, 0],
+            ],
+            ink: null,
+            route: { kind: 'loop', direction: 'counterclockwise' },
+          },
+        ],
+      })
+    ).toThrow('trail[0] loop direction is counterclockwise but geometry winding is clockwise');
+
+    // Loop trail with collinear / zero area
+    expect(() =>
+      validateProject({
+        ...validBase(),
+        features: [
+          {
+            id: 'f9',
+            name: 'Collinear Loop',
+            color: '#000',
+            notes: '',
+            kind: 'trail',
+            pts: [
+              [0, 0],
+              [5, 5],
+              [10, 10],
+              [0, 0],
+            ],
+            ink: null,
+            route: { kind: 'loop', direction: 'clockwise' },
+          },
+        ],
+      })
+    ).toThrow('trail[0] loop must have non-zero signed area');
   });
 
   test('rejects invalid fitMethod, units, seq, trace and autoTrace', () => {
@@ -566,17 +803,61 @@ describe('migrateProject', () => {
     expect(migrated).toEqual(p);
   });
 
-  test('v1 project data migrates to version 2 via the 1->2 migration step', () => {
+  test('v2 project data migrates sequentially through v3 to version 4 and preserves existing fields', () => {
+    const p3 = newProject(createSampleMapImage(), 'V2 Project', '2026-09-24T12:00:00.000Z');
+    const rawV2 = { ...p3, version: 2 };
+    const migrated = migrateProject(rawV2);
+    expect(migrated.version).toBe(4);
+    expect(migrated.name).toBe('V2 Project');
+    expect(migrated.image).toEqual(p3.image);
+    expect(migrated.anchors).toEqual(p3.anchors);
+    expect(migrated.features).toEqual(p3.features);
+    expect(migrated.fitMethod).toBe(p3.fitMethod);
+    expect(migrated.trace).toEqual(p3.trace);
+  });
+
+  test('v3 project data migrates to version 4 and strips unknown route data from pre-v4 input', () => {
+    const p = newProject(createSampleMapImage(), 'V3 Project', '2026-09-24T12:00:00.000Z');
+    const rawV3 = {
+      ...p,
+      version: 3,
+      features: [
+        {
+          id: 'f1',
+          kind: 'trail',
+          name: 'Old Trail',
+          color: '#333333',
+          notes: '',
+          pts: [
+            [0, 0],
+            [10, 10],
+          ],
+          ink: null,
+          route: { kind: 'unknown-future-data' },
+        },
+      ],
+    };
+    const migrated = migrateProject(rawV3);
+    expect(migrated.version).toBe(4);
+    expect(migrated.name).toBe('V3 Project');
+    const trail = migrated.features[0]!;
+    expect(trail.kind).toBe('trail');
+    if (trail.kind === 'trail') {
+      expect(trail.route).toBeUndefined();
+    }
+  });
+
+  test('v1 project data migrates sequentially through v2 and v3 to version 4', () => {
     const p2 = newProject(createSampleMapImage(), 'V1 Project', '2026-09-24T12:00:00.000Z');
     const rawV1 = { ...p2, version: 1 };
     const migrated = migrateProject(rawV1);
-    expect(migrated.version).toBe(2);
+    expect(migrated.version).toBe(4);
     expect(migrated.name).toBe('V1 Project');
     expect(migrated.anchors).toEqual(p2.anchors);
     expect(migrated.features).toEqual(p2.features);
   });
 
-  test('a v1 .trailmaker zip archive opens in the v2 build with version migrated to 2', () => {
+  test('a v1 .trailmaker zip archive opens in the v4 build with version migrated to 4', () => {
     const p2 = newProject(createSampleMapImage(), 'Legacy V1 Zip', '2026-09-24T12:00:00.000Z');
     const v1Json = JSON.stringify({ ...p2, version: 1 });
     const v1Zip = zipSync({
@@ -584,11 +865,11 @@ describe('migrateProject', () => {
       'image.png': new Uint8Array([1, 2, 3]),
     });
     const { project } = deserializeProject(v1Zip);
-    expect(project.version).toBe(2);
+    expect(project.version).toBe(4);
     expect(project.name).toBe('Legacy V1 Zip');
   });
 
-  test('saving any project, including one opened from v1, writes version 2', () => {
+  test('saving any project, including one opened from v1, writes version 4', () => {
     const p2 = newProject(createSampleMapImage(), 'V1 To Resave', '2026-09-24T12:00:00.000Z');
     const v1Json = JSON.stringify({ ...p2, version: 1 });
     const v1Zip = zipSync({
@@ -596,23 +877,23 @@ describe('migrateProject', () => {
       'image.png': new Uint8Array([1, 2, 3]),
     });
     const opened = deserializeProject(v1Zip);
-    expect(opened.project.version).toBe(2);
+    expect(opened.project.version).toBe(4);
 
     const resavedZip = serializeProject(opened.project, opened.image);
     const unzipped = deserializeProject(resavedZip);
-    expect(unzipped.project.version).toBe(2);
+    expect(unzipped.project.version).toBe(4);
     expect(unzipped.project.name).toBe('V1 To Resave');
   });
 
   test('a v2 file fed to a v1-only registry gets the "made by a newer Trailmaker" error', () => {
     resetMigrations(true);
     try {
-      const v2Proj = newProject(createSampleMapImage(), 'V2 Proj', '2026-09-24T12:00:00.000Z');
-      const storedImage: StoredImage = {
-        bytes: new Uint8Array([1, 2, 3]),
-        mimeType: 'image/png',
-      };
-      const v2Zip = serializeProject(v2Proj, storedImage);
+      const v3Proj = newProject(createSampleMapImage(), 'V2 Proj', '2026-09-24T12:00:00.000Z');
+      const v2Proj = { ...v3Proj, version: 2 };
+      const v2Zip = zipSync({
+        'project.json': new TextEncoder().encode(JSON.stringify(v2Proj)),
+        'image.png': new Uint8Array([1, 2, 3]),
+      });
 
       // Feeding v2 zip to v1 registry (maxVersion 1) throws newer Trailmaker error
       expect(() => deserializeProject(v2Zip, 1)).toThrow(

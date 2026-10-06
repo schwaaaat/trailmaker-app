@@ -55,8 +55,13 @@ function placemarkOf(f: GeoFeature, opts: ExportOptions): string {
     `<Placemark>${name}<description>${esc(featureDescription(f, opts.units))}</description>` +
     `<styleUrl>#${id}</styleUrl>`;
   if (f.kind === 'trail') {
+    const extData = f.route
+      ? `<ExtendedData><Data name="route"><value>${esc(f.route.kind)}</value></Data>` +
+        (f.route.kind === 'loop' ? `<Data name="direction"><value>${esc(f.route.direction)}</value></Data>` : '') +
+        `</ExtendedData>`
+      : '';
     return (
-      `${head}<LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode>` +
+      `${head}${extData}<LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode>` +
       `<coordinates>${coords(f.ll)}</coordinates></LineString></Placemark>\n`
     );
   }

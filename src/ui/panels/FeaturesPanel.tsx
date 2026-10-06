@@ -9,6 +9,7 @@ import {
   POI_TYPES,
   type Feature,
   type GeoFit,
+  type LoopDirection,
   type PoiType,
   type Px,
   type Trail,
@@ -16,8 +17,13 @@ import {
 } from '../../core/types';
 import {
   deleteFeature,
+  isRefusal,
   reverseTrail,
   setFeaturePoints,
+  setLoopDirection,
+  setLoopStart,
+  setOneWayStart,
+  setTrailRoute,
   simplifyFeatures,
   updateFeature,
 } from '../../state/commands';
@@ -357,6 +363,7 @@ function FeatureEditor() {
       {joinArmed ? (
         <p className="hint touch-join-status">Tap another trail on the map to join it.</p>
       ) : null}
+      {f.kind === 'trail' ? <TrailRouteControl f={f} /> : null}
       {f.kind === 'trail' || f.kind === 'area' ? <SimplifyControl f={f} /> : null}
       <div className="row">
         {f.kind === 'trail' ? (
@@ -416,6 +423,129 @@ function FeatureEditor() {
           Delete
         </button>
       </div>
+    </div>
+  );
+}
+
+function TrailRouteControl({ f }: { f: Trail }) {
+  const p = project();
+  const focusedVertex = useApp((s) => s.vertexFocus);
+
+  if (!p) return null;
+
+  const onRouteTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value;
+    if (val === '') {
+      const res = setTrailRoute(p, f.id, undefined);
+      if (!isRefusal(res)) edit(res);
+    } else if (val === 'one-way') {
+      const res = setTrailRoute(p, f.id, { kind: 'one-way' });
+      if (isRefusal(res)) {
+        showToast(res.error);
+      } else {
+        edit(res);
+      }
+    } else if (val === 'loop') {
+      const snapTol = cleanupTolerancePx(currentEditor()?.view.s ?? 1);
+      const res = setTrailRoute(p, f.id, { kind: 'loop' }, snapTol);
+      if (isRefusal(res)) {
+        showToast(res.error);
+      } else {
+        edit(res);
+      }
+    }
+  };
+
+  const isOneWay = f.route?.kind === 'one-way';
+  const isLoop = f.route?.kind === 'loop';
+
+  return (
+    <div className="route-control" role="group" aria-label="Route classification and travel direction">
+      <div className="two">
+        <label className="field">
+          Route type
+          <select
+            aria-label="Route type"
+            value={f.route?.kind ?? ''}
+            onChange={onRouteTypeChange}
+          >
+            <option value="">Unclassified</option>
+            <option value="one-way">One-way</option>
+            <option value="loop">Loop</option>
+          </select>
+        </label>
+        {isLoop ? (
+          <label className="field">
+            Loop direction
+            <select
+              aria-label="Loop direction"
+              value={f.route.direction}
+              onChange={(e) => {
+                edit(setLoopDirection(p, f.id, e.target.value as LoopDirection));
+              }}
+            >
+              <option value="clockwise">Clockwise</option>
+              <option value="counterclockwise">Counterclockwise</option>
+            </select>
+          </label>
+        ) : null}
+      </div>
+
+      {isOneWay ? (
+        <div className="row route-actions">
+          <span className="hint" role="status">
+            Start at point 1, end at point {f.pts.length}
+          </span>
+          <button
+            type="button"
+            className="btn small"
+            title="Swap trailhead and end (reverse travel direction)"
+            onClick={() => {
+              edit(setOneWayStart(p, f.id, 1));
+            }}
+          >
+            Swap start and end
+          </button>
+        </div>
+      ) : null}
+
+      {isLoop ? (
+        <div className="row route-actions">
+          <label className="field" style={{ flex: 1, margin: 0 }}>
+            Start point
+            <select
+              aria-label="Loop start point"
+              value={0}
+              onChange={(e) => {
+                const idx = Number(e.target.value);
+                if (!isNaN(idx) && idx >= 0 && idx < f.pts.length - 1) {
+                  edit(setLoopStart(p, f.id, idx));
+                }
+              }}
+            >
+              {f.pts.slice(0, f.pts.length - 1).map((_, i) => (
+                <option key={i} value={i}>
+                  Point {i + 1}{i === 0 ? ' (Trailhead)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          {focusedVertex &&
+          focusedVertex.featureId === f.id &&
+          focusedVertex.index > 0 &&
+          focusedVertex.index < f.pts.length - 1 ? (
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => {
+                edit(setLoopStart(p, f.id, focusedVertex.index));
+              }}
+            >
+              Start at point {focusedVertex.index + 1}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

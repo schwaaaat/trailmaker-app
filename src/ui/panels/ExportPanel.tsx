@@ -11,7 +11,7 @@ import { formatLength, slugify } from '../../core/export/format';
 import { geoJsonParts } from '../../core/export/geojson';
 import { gpxParts } from '../../core/export/gpx';
 import { kmlParts } from '../../core/export/kml';
-import { overlayQuad } from '../../core/geo/fit';
+import { exportOverlayQuad } from '../../core/export/kmz';
 import type {
   ExportDocument,
   ExportOptions,
@@ -173,7 +173,8 @@ async function buildKmzBytes(
   if (!map) throw new Error('No map is open');
   const bytes = await encodeOverlayJpeg(map);
   run.check();
-  const quad = overlayQuad(fit, p.image.width, p.image.height);
+  const quad = exportOverlayQuad(p.image, fit);
+  if (!quad) throw new Error('KMZ overlay image needs its corner quad');
   // The KML writer reads only lat/lon. Dropping the pixel paths halves the structured clone that
   // postMessage makes on this thread (~90 ms for the full document at 2,000 x 50).
   const lean: ExportDocument = {

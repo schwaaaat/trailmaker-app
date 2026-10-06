@@ -70,7 +70,7 @@ export type MapSource =
       readonly kind: 'tiles';
       /** Imagery source id (e.g. 'martin-county', or 'custom:<url>' for a pasted tiled service). */
       readonly sourceId: string;
-      /** Web Mercator zoom of the full-resolution level. */
+      /** Web Mercator zoom of level 0. Optional sparse level -1 detail is one zoom finer. */
       readonly z: number;
       /** Tile edge in pixels (256 for ArcGIS caches). */
       readonly tileSize: number;
@@ -264,7 +264,19 @@ export interface FeatureBase {
   readonly notes: string;
 }
 
-/** A traced trail: an open polyline. */
+/** Travel around a closed loop, as seen on the map (image y increases downward). */
+export type LoopDirection = 'clockwise' | 'counterclockwise';
+
+/**
+ * Explicit route meaning. Geometry is in travel order; pts[0] is the trailhead.
+ * A loop repeats that point at the end and its winding agrees with direction.
+ * Absence means unclassified. Split/join results must be relabelled explicitly.
+ */
+export type TrailRoute =
+  | { readonly kind: 'one-way' }
+  | { readonly kind: 'loop'; readonly direction: LoopDirection };
+
+/** A traced trail: a polyline, optionally classified as a directed route. */
 export interface Trail extends FeatureBase {
   /** Discriminant. */
   readonly kind: 'trail';
@@ -272,6 +284,8 @@ export interface Trail extends FeatureBase {
   readonly pts: readonly Px[];
   /** Ink color the trail was traced along (for smart "continue"), or null if drawn by hand. */
   readonly ink: Rgb | null;
+  /** Persistent route labels bound to the ordered vertices, never detached map points. */
+  readonly route?: TrailRoute;
 }
 
 /** A point of interest. */
@@ -340,7 +354,7 @@ export interface AutoTraceSettings {
 }
 
 /** Current project schema version. Bump with a migration in src/core/project. v2 (D-024): v1 plus an optional imported.gpx zip entry. */
-export const PROJECT_VERSION = 2;
+export const PROJECT_VERSION = 4;
 
 /** Everything the user has made for one map. Serializable; the map pixels are stored alongside, not inside. */
 export interface Project {

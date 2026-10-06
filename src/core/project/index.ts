@@ -15,6 +15,7 @@ import type {
   Units,
 } from '../types';
 import { DEFAULT_COLORS, POI_TYPES, PROJECT_VERSION } from '../types';
+import { isClosedLoop, loopWinding } from '../geo/route';
 
 export { DEFAULT_COLORS, PROJECT_VERSION };
 export type { MapImage, Project };
@@ -24,6 +25,15 @@ export interface StoredImage {
   /** Original file bytes (not the downscaled working raster). */
   readonly bytes: Uint8Array;
   /** MIME type of bytes. */
+  readonly mimeType: string;
+}
+
+/** A locally stored tile that can be embedded for desktop-to-phone transfer. */
+export interface StoredProjectTile {
+  readonly level: number;
+  readonly col: number;
+  readonly row: number;
+  readonly bytes: Uint8Array;
   readonly mimeType: string;
 }
 
@@ -167,6 +177,13 @@ function validateMapImage(img: unknown): void {
     if (!isFiniteNumber(src.renderScale) || src.renderScale <= 0) {
       throw new Error('image.source.renderScale must be a positive number');
     }
+  } else if (src.kind === 'tiles') {
+    if (typeof src.sourceId !== 'string' || !src.sourceId) throw new Error('image.source.sourceId must be a non-empty string');
+    if (!Number.isInteger(src.z) || (src.z as number) < 0) throw new Error('image.source.z must be a non-negative integer');
+    if (!Number.isInteger(src.tileSize) || (src.tileSize as number) < 1) throw new Error('image.source.tileSize must be a positive integer');
+    if (!isObject(src.origin) || !isFiniteNumber(src.origin.x) || !isFiniteNumber(src.origin.y)) throw new Error('image.source.origin must contain finite x and y');
+    if (!Array.isArray(src.boundary) || src.boundary.length < 3 || !src.boundary.every(isFinitePair)) throw new Error('image.source.boundary must contain at least three coordinates');
+    if (!Number.isInteger(src.tileCount) || (src.tileCount as number) < 1) throw new Error('image.source.tileCount must be a positive integer');
   } else {
     throw new Error(`unknown image.source.kind "${String((src as Record<string, unknown>).kind)}"`);
   }
@@ -214,6 +231,35 @@ function validateFeature(f: unknown, idx: number): void {
     }
     if (f.ink !== null && !isFiniteTriplet(f.ink)) {
       throw new Error(`trail[${idx}].ink must be null or an RGB triplet`);
+    }
+    if (f.route !== undefined) {
+      if (!isObject(f.route)) {
+        throw new Error(`trail[${idx}].route must be an object`);
+      }
+      const r = f.route;
+      if (r.kind === 'one-way') {
+        const first = f.pts[0] as [number, number];
+        const last = f.pts[f.pts.length - 1] as [number, number];
+        if (first[0] === last[0] && first[1] === last[1]) {
+          throw new Error(`trail[${idx}] has one-way route but is closed or degenerate`);
+        }
+      } else if (r.kind === 'loop') {
+        if (r.direction !== 'clockwise' && r.direction !== 'counterclockwise') {
+          throw new Error(`trail[${idx}].route.direction must be 'clockwise' or 'counterclockwise'`);
+        }
+        if (!isClosedLoop(f.pts as readonly Px[])) {
+          throw new Error(`trail[${idx}] loop must be closed with at least 3 distinct vertices`);
+        }
+        const winding = loopWinding(f.pts as readonly Px[]);
+        if (!winding) {
+          throw new Error(`trail[${idx}] loop must have non-zero signed area`);
+        }
+        if (winding !== r.direction) {
+          throw new Error(`trail[${idx}] loop direction is ${r.direction} but geometry winding is ${winding}`);
+        }
+      } else {
+        throw new Error(`unknown trail[${idx}].route.kind "${String((r as Record<string, unknown>).kind)}"`);
+      }
     }
   } else if (f.kind === 'poi') {
     if (!isFinitePair(f.at)) {
@@ -332,6 +378,26 @@ export function registerDefaultMigrations(): void {
     ...raw,
     version: 2,
   }));
+  migrationRegistry.set(2, (raw) => ({
+    ...raw,
+    version: 3,
+  }));
+  migrationRegistry.set(3, (raw) => {
+    const features = Array.isArray(raw.features)
+      ? raw.features.map((f) => {
+          if (isObject(f) && f.kind === 'trail') {
+            const { route: _, ...rest } = f;
+            return rest;
+          }
+          return f;
+        })
+      : raw.features;
+    return {
+      ...raw,
+      version: 4,
+      features,
+    };
+  });
 }
 
 export function registerMigration(fromVersion: number, step: MigrationStep): void {
@@ -383,6 +449,7 @@ export function serializeProject(
   project: Project,
   image: StoredImage,
   gpxBytes?: Uint8Array,
+  tiles: readonly StoredProjectTile[] = [],
 ): Uint8Array {
   validateProject(project);
   if (!(image.bytes instanceof Uint8Array)) {
@@ -400,6 +467,15 @@ export function serializeProject(
     [imageFileName]: isPrecompressed ? [image.bytes, { level: 0 }] : image.bytes,
   };
 
+  for (const tile of tiles) {
+    if (!Number.isInteger(tile.level) || tile.level < -1 || !Number.isInteger(tile.col) || tile.col < 0 || !Number.isInteger(tile.row) || tile.row < 0 || !(tile.bytes instanceof Uint8Array)) {
+      throw new Error('Cannot serialize project: invalid stored tile.');
+    }
+    const ext = extFromMimeType(tile.mimeType);
+    archiveData[`tiles/${tile.level}/${tile.col}_${tile.row}.${ext}`] =
+      PRECOMPRESSED_EXTS.has(ext) ? [tile.bytes, { level: 0 }] : tile.bytes;
+  }
+
   if (gpxBytes && gpxBytes.byteLength > 0) {
     archiveData['imported.gpx'] = gpxBytes;
   }
@@ -409,7 +485,7 @@ export function serializeProject(
 
 export interface ProjectTestSeam {
   serializeAsync?: ((project: Project, image: StoredImage, gpxBytes?: Uint8Array) => Promise<Uint8Array>) | null;
-  deserializeAsync?: ((bytes: Uint8Array, maxVersion?: number) => Promise<{ project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined }>) | null;
+  deserializeAsync?: ((bytes: Uint8Array, maxVersion?: number) => Promise<{ project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined; tiles?: StoredProjectTile[] }>) | null;
 }
 
 export const projectTestSeam: ProjectTestSeam = {
@@ -434,6 +510,7 @@ export async function serializeProjectAsync(
   project: Project,
   image: StoredImage,
   gpxBytes?: Uint8Array,
+  tiles: readonly StoredProjectTile[] = [],
 ): Promise<Uint8Array> {
   if (projectTestSeam.serializeAsync) {
     return projectTestSeam.serializeAsync(project, image, gpxBytes);
@@ -454,6 +531,14 @@ export async function serializeProjectAsync(
     'project.json': jsonBytes,
     [imageFileName]: isPrecompressed ? [image.bytes, { level: 0 }] : image.bytes,
   };
+  for (const tile of tiles) {
+    if (!Number.isInteger(tile.level) || tile.level < -1 || !Number.isInteger(tile.col) || tile.col < 0 || !Number.isInteger(tile.row) || tile.row < 0 || !(tile.bytes instanceof Uint8Array)) {
+      throw new Error('Cannot serialize project: invalid stored tile.');
+    }
+    const ext = extFromMimeType(tile.mimeType);
+    archiveData[`tiles/${tile.level}/${tile.col}_${tile.row}.${ext}`] =
+      PRECOMPRESSED_EXTS.has(ext) ? [tile.bytes, { level: 0 }] : tile.bytes;
+  }
 
   if (gpxBytes && gpxBytes.byteLength > 0) {
     archiveData['imported.gpx'] = gpxBytes;
@@ -514,7 +599,7 @@ export function migrateProject(raw: unknown, maxVersion = PROJECT_VERSION): Proj
 function parseProjectArchive(
   files: Record<string, Uint8Array>,
   maxVersion = PROJECT_VERSION,
-): { project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined } {
+): { project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined; tiles?: StoredProjectTile[] } {
   const projectBytes = files['project.json'];
   if (!projectBytes) {
     throw new Error('Invalid Trailmaker project file: missing project.json');
@@ -550,6 +635,19 @@ function parseProjectArchive(
   }
 
   const gpxBytes = files['imported.gpx'];
+  const tiles: StoredProjectTile[] = [];
+  for (const [path, bytes] of Object.entries(files)) {
+    const match = /^tiles\/(-?\d+)\/(\d+)_(\d+)\.([a-z0-9]+)$/i.exec(path);
+    if (match) {
+      tiles.push({
+        level: Number(match[1]),
+        col: Number(match[2]),
+        row: Number(match[3]),
+        bytes,
+        mimeType: mimeTypeFromExt(match[4]!),
+      });
+    }
+  }
 
   return {
     project,
@@ -558,6 +656,7 @@ function parseProjectArchive(
       mimeType,
     },
     ...(gpxBytes ? { gpxBytes } : {}),
+    ...(tiles.length ? { tiles } : {}),
   };
 }
 
@@ -565,7 +664,7 @@ function parseProjectArchive(
 export function deserializeProject(
   bytes: Uint8Array,
   maxVersion = PROJECT_VERSION,
-): { project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined } {
+): { project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined; tiles?: StoredProjectTile[] } {
   if (!(bytes instanceof Uint8Array)) {
     throw new Error('Invalid Trailmaker project file: input must be a Uint8Array');
   }
@@ -589,7 +688,7 @@ export function deserializeProject(
 export async function deserializeProjectAsync(
   bytes: Uint8Array,
   maxVersion = PROJECT_VERSION,
-): Promise<{ project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined }> {
+): Promise<{ project: Project; image: StoredImage; gpxBytes?: Uint8Array | undefined; tiles?: StoredProjectTile[] }> {
   if (projectTestSeam.deserializeAsync) {
     return projectTestSeam.deserializeAsync(bytes, maxVersion);
   }

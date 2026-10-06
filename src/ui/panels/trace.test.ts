@@ -1,12 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AutoTraceCandidate,
   AutoTraceRequest,
   ColorChip,
   ColorScanResult,
+  ImageId,
   JobControl,
   Project,
   Px,
+  RasterImage,
+  Rgb,
   ScannedColor,
   SmartTraceRequest,
   SmartTraceResult,
@@ -27,7 +30,10 @@ import { idle, installSmartFollow, pickRadius, snapRadius } from '../editor/smar
 import { Tools, chooseTool, settled } from '../editor/tools';
 import { toScr } from '../editor/view';
 import { splitReviewedCandidateAtMidpoint } from './candidate-split';
+import type { TileLevel, TiledRegionRaster } from '../contract';
 import {
+  autoTraceRegion,
+  autoTraceLevelForRegion,
   acceptReviewed,
   cancelRunningJob,
   clearScanCacheForTests,
@@ -79,6 +85,155 @@ function setup(over: Partial<WorkerApi> = {}, project: Project = makeProject({ s
 }
 
 const click = (p: Px) => tap(canvas, toScr(ed.view, p) as [number, number]);
+
+const DETAIL_TRAIL_RGB: Rgb = [200, 40, 40];
+
+function detailOnlyTrailRaster(
+  rect: { x: number; y: number; width: number; height: number },
+  level: number,
+): TiledRegionRaster {
+  const scale = 2 ** -level;
+  const width = Math.ceil(rect.width * scale);
+  const height = Math.ceil(rect.height * scale);
+  const data = new Uint8ClampedArray(width * height * 4);
+  if (level === -1) {
+    const row = Math.floor(height / 2);
+    for (let x = 0; x < width; x++) {
+      const offset = (row * width + x) * 4;
+      data.set([...DETAIL_TRAIL_RGB, 255], offset);
+    }
+  }
+  return {
+    width,
+    height,
+    data,
+    ...(level === -1 ? { detailCoverage: new Uint8Array(width * height).fill(255) } : {}),
+  };
+}
+
+function openDetailTiled(
+  project: Project,
+  readRegion: (
+    rect: { x: number; y: number; width: number; height: number },
+    level: number,
+  ) => Promise<TiledRegionRaster>,
+) {
+  const session = makeSession(project);
+  openSession({
+    ...session,
+    map: {
+      ...session.map,
+      tiles: {
+        levels: [
+          {
+            level: -1,
+            width: project.image.width * 2,
+            height: project.image.height * 2,
+            cols: 8,
+            rows: 7,
+          },
+          { level: 0, width: project.image.width, height: project.image.height, cols: 4, rows: 4 },
+        ],
+        tileSize: 256,
+        overviewScale: 0.5,
+        getTileBitmap: async () => null,
+        readRegion,
+      },
+    },
+  });
+}
+
+function hasDetailTrail(raster: RasterImage | undefined): boolean {
+  if (!raster) return false;
+  for (let i = 0; i < raster.data.length; i += 4) {
+    if (
+      raster.data[i] === DETAIL_TRAIL_RGB[0] &&
+      raster.data[i + 1] === DETAIL_TRAIL_RGB[1] &&
+      raster.data[i + 2] === DETAIL_TRAIL_RGB[2]
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+describe('regional auto-trace level selection', () => {
+  beforeEach(() => setup());
+
+  const levels: TileLevel[] = [
+    { level: 0, width: 40000, height: 30000, cols: 157, rows: 118 },
+    { level: 1, width: 20000, height: 15000, cols: 79, rows: 59 },
+    { level: 2, width: 10000, height: 7500, cols: 40, rows: 30 },
+    { level: 3, width: 5000, height: 3750, cols: 20, rows: 15 },
+  ];
+
+  it('chooses the finest level that fits the selected region, not the whole map', () => {
+    expect(autoTraceLevelForRegion(levels, { width: 8000, height: 8000 })).toBe(1);
+  });
+
+  it('keeps level 0 when the selected region is already within budget', () => {
+    expect(autoTraceLevelForRegion(levels, { width: 7000, height: 7000 })).toBe(0);
+  });
+
+  it('uses V to auto-trace the bounded current view on a tiled map', async () => {
+    const project = makeProject({
+      autoTrace: {
+        chips: [
+          {
+            id: 'c1',
+            name: 'Red',
+            rgb: [200, 40, 40],
+            enabled: true,
+            share: null,
+            named: false,
+          },
+        ],
+        gapPx: 12,
+        minLengthPct: 4,
+      },
+    });
+    setup({}, project);
+    const session = makeSession(project);
+    const readRegion = vi.fn(async ({ width, height }: { width: number; height: number }) => ({
+      width,
+      height,
+      data: new Uint8ClampedArray(width * height * 4),
+    }));
+    openSession({
+      ...session,
+      map: {
+        ...session.map,
+        tiles: {
+          levels: [{ level: 0, width: 1000, height: 800, cols: 4, rows: 4 }],
+          tileSize: 256,
+          overviewScale: 0.5,
+          getTileBitmap: async () => null,
+          readRegion,
+        },
+      },
+    });
+    await idle();
+    const visibleRegion = ed.visibleMapRegion!;
+    appStore.setState({ regionTraceMode: true });
+
+    const event = key('v');
+    expect(event.defaultPrevented).toBe(true);
+    expect(st().regionTraceMode).toBe(false);
+    await idle();
+
+    expect(readRegion).toHaveBeenCalledWith(visibleRegion, 0);
+    expect(worker.of('autoTrace')).toHaveLength(1);
+    const request = worker.of('autoTrace')[0]!.args[0] as AutoTraceRequest;
+    expect(request.imageId).not.toBe(st().imageId);
+  });
+
+  it('does not run whole-image tracing for a regional request on a non-tiled map', async () => {
+    setup();
+    await autoTraceRegion({ x: 100, y: 100, width: 200, height: 150 });
+    expect(worker.of('autoTrace')).toHaveLength(0);
+    expect(worker.of('scanColors')).toHaveLength(0);
+  });
+});
 
 beforeEach(async () => {
   await settled();
@@ -147,6 +302,58 @@ describe('smart follow', () => {
     // The path's first point (= the draft's last) is not repeated.
     expect(st().draft!.pts).toHaveLength(3);
     expect(st().draft!.cps).toStrictEqual([1, 3]);
+  });
+
+  it('uses a trail present only in sparse detail for follow and ink pick', async () => {
+    const loaded = new Map<ImageId, RasterImage>();
+    let imageCount = 0;
+    setup({
+      loadImage: async (raster) => {
+        const id = `tool-image-${++imageCount}` as ImageId;
+        loaded.set(id, raster);
+        return id;
+      },
+      pickInk: async (id) => (hasDetailTrail(loaded.get(id)) ? DETAIL_TRAIL_RGB : [0, 180, 0]),
+      snapToInk: async (_id, at) => at,
+      smartTrace: async (request) =>
+        hasDetailTrail(loaded.get(request.imageId))
+          ? {
+              path: [
+                request.from,
+                [(request.from[0] + request.to[0]) / 2, request.from[1] + 2],
+                request.to,
+              ],
+              snappedTo: request.to,
+              ms: 5,
+            }
+          : { path: null, snappedTo: request.to, ms: 5 },
+    });
+    const readRegion = vi.fn(
+      async (rect: { x: number; y: number; width: number; height: number }, level: number) =>
+        detailOnlyTrailRaster(rect, level),
+    );
+    openDetailTiled(proj(), readRegion);
+
+    chooseTool('trail');
+    click([100, 500]);
+    await idle();
+    expect(st().draft?.ink).toStrictEqual(DETAIL_TRAIL_RGB);
+    expect(worker.of('pickInk')[0]!.args[2]).toBeCloseTo(pickRadius(ed.view) * 2, 9);
+    expect(worker.of('snapToInk')[0]!.args[4]).toBeCloseTo(snapRadius(ed.view) * 2, 9);
+
+    click([300, 500]);
+    await idle();
+    expect(st().draft?.pts).toContainEqual([200, 501]);
+    const traceRequest = worker.of('smartTrace')[0]!.args[0] as SmartTraceRequest;
+    expect(traceRequest.snapRadiusPx).toBeCloseTo(snapRadius(ed.view) * 2, 9);
+
+    pickColor('trace');
+    click([400, 400]);
+    await idle();
+    expect(proj().trace.ink).toStrictEqual(DETAIL_TRAIL_RGB);
+    expect(worker.of('pickInk')).toHaveLength(2);
+    expect(worker.of('pickInk')[1]!.args[2]).toBeCloseTo(pickRadius(ed.view) * 2, 9);
+    expect(readRegion.mock.calls.map(([, level]) => level)).toStrictEqual([-1, -1, -1]);
   });
 
   it('uses the picked ink instead of picking from the first click', async () => {

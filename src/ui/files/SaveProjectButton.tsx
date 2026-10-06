@@ -1,8 +1,13 @@
 // Lane C. Save project button (card T-304).
 import React, { useEffect, useState } from 'react';
-import { serializeProjectAsync, type StoredImage } from '../../core/project';
+import {
+  serializeProjectAsync,
+  type StoredImage,
+  type StoredProjectTile,
+} from '../../core/project';
 import { downloadBlob } from '../../io/download';
 import { getActiveGpx } from '../../io/gpxStorage';
+import { listTileRecords, tiledMapStorageId } from '../../io/tile-store';
 import { sessionBridge } from '../../state/bridge';
 import { setBusy as storeSetBusy, showToast as storeShowToast } from '../../state/store';
 import type { Session, SessionBridge } from '../contract';
@@ -57,13 +62,23 @@ export function SaveProjectButton({
 
       const storedImage: StoredImage = { bytes, mimeType };
       const activeGpx = getActiveGpx();
-      const gpxBytes = activeGpx?.rawGpx
-        ? new TextEncoder().encode(activeGpx.rawGpx)
-        : undefined;
-      const zipBytes = await serializeProject(current.project, storedImage, gpxBytes);
+      const gpxBytes = activeGpx?.rawGpx ? new TextEncoder().encode(activeGpx.rawGpx) : undefined;
+      const storedTiles: StoredProjectTile[] =
+        source.kind === 'tiles'
+          ? (await listTileRecords(tiledMapStorageId(source))).map((tile) => ({
+              level: tile.level,
+              col: tile.col,
+              row: tile.row,
+              bytes: tile.data,
+              mimeType: tile.mimeType,
+            }))
+          : [];
+      const zipBytes = await serializeProject(current.project, storedImage, gpxBytes, storedTiles);
 
       const filename = `${slug(current.project.name)}.trailmaker`;
-      const blob = new Blob([zipBytes as unknown as BlobPart], { type: 'application/octet-stream' });
+      const blob = new Blob([zipBytes as unknown as BlobPart], {
+        type: 'application/octet-stream',
+      });
       await downloadBlob(filename, blob);
       showToast(`Saved ${filename}`);
     } catch (err) {

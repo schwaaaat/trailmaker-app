@@ -5,10 +5,18 @@
 // It also owns the map image lifecycle: each LoadedMap's raster is transferred to the worker once,
 // its ImageId kept in the store, and released (with its running jobs cancelled) when the session
 // moves to another map. Results of jobs started on an old map are dropped by `stillOn(map)`.
-import { JOB_CANCELLED, type ImageId, type JobId, type WorkerApi } from '../core/types';
+import {
+  JOB_CANCELLED,
+  type ImageId,
+  type JobId,
+  type Px,
+  type RasterImage,
+  type WorkerApi,
+} from '../core/types';
 import type { LoadedMap } from '../ui/contract';
 import { getWorker, newJobId } from '../worker/client';
 import { appStore, showToast } from './store';
+import { regionTransform } from '../ui/editor/tiled-map';
 
 let override: { api: WorkerApi; ids: () => JobId } | null = null;
 
@@ -134,6 +142,70 @@ export function imageFor(map: LoadedMap): Promise<ImageId> {
     );
   }
   return id;
+}
+
+export interface LoadedPixelRegion {
+  readonly imageId: ImageId;
+  readonly readMs: number;
+  readonly loadMs: number;
+  /** Worker-image pixels per level-0 map pixel (2 for sparse level -1). */
+  readonly pixelScale: number;
+  /** Convert virtual full-resolution Px into this worker image's local pixel coordinates. */
+  toLocal(point: Px): Px;
+  /** Convert worker pixel coordinates back to virtual full-resolution Px. */
+  toMap(point: Px): Px;
+  /** Release temporary worker pixels. Full-image handles are shared and are not released here. */
+  release(): Promise<void>;
+}
+
+/** Prefer sparse maximum-detail pixels for local tools when the active handle exposes them. */
+export function preferredToolPixelLevel(map: LoadedMap): number {
+  return map.tiles?.levels.some(({ level }) => level === -1) ? -1 : 0;
+}
+
+/** Load a full-resolution tiled-map patch into the worker, scoped to one operation. */
+export async function loadPixelRegion(
+  map: LoadedMap,
+  rect: { x: number; y: number; width: number; height: number },
+  level = 0,
+): Promise<LoadedPixelRegion> {
+  const source = map.tiles;
+  if (!source) {
+    const imageId = await imageFor(map);
+    return {
+      imageId,
+      readMs: 0,
+      loadMs: 0,
+      pixelScale: 1,
+      toLocal: (point) => point,
+      toMap: (point) => point,
+      release: async () => {},
+    };
+  }
+  const x = Math.max(0, Math.floor(rect.x));
+  const y = Math.max(0, Math.floor(rect.y));
+  const right = Math.min(map.meta.width, Math.ceil(rect.x + rect.width));
+  const bottom = Math.min(map.meta.height, Math.ceil(rect.y + rect.height));
+  if (right <= x || bottom <= y) throw new Error('Pixel region is outside the tiled map');
+  const readStarted = performance.now();
+  const raster: RasterImage = await source.readRegion(
+    { x, y, width: right - x, height: bottom - y },
+    level,
+  );
+  const readMs = performance.now() - readStarted;
+  const loadStarted = performance.now();
+  const imageId = await call((api) => api.loadImage(raster));
+  const loadMs = performance.now() - loadStarted;
+  const transform = regionTransform({ x, y }, level);
+  return {
+    imageId,
+    readMs,
+    loadMs,
+    pixelScale: 2 ** -level,
+    toLocal: transform.toLocal,
+    toMap: transform.toMap,
+    release: () => call((api) => api.releaseImage(imageId)),
+  };
 }
 
 /** True while the session is still on `map` (results for another map must be dropped). */

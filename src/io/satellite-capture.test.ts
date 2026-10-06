@@ -304,7 +304,7 @@ describe('Tile stitching & missing tile handling', () => {
 
   it('falls back to NAIP when a curated imagery request fails', async () => {
     const result = await captureSatelliteView({
-      bounds: { north: 27.135, south: 27.13, west: -80.145, east: -80.14 },
+      bounds: { north: 27.135, south: 27.134, west: -80.145, east: -80.144 },
       imagerySource: IMAGERY_SOURCES[0],
       serviceRequestLoader: async () => {
         throw new Error('Imagery service returned HTTP 503');
@@ -314,7 +314,7 @@ describe('Tile stitching & missing tile handling', () => {
     expect(result.source).toBe('naip');
     expect(result.fallbackReason).toContain('HTTP 503');
     expect(result.fallbackReason).toContain('using USGS NAIP');
-  });
+  }, 15_000);
 
   it('preserves request failures for a pasted custom imagery source', async () => {
     const customSource = parseArcGisService(

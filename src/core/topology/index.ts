@@ -1,5 +1,6 @@
 // Lane A, M2. Trail topology: snapping, split, join.
 import type { Feature, FeatureId, Px, SnapOptions, TopologyEdit, Trail } from '../types';
+import { validateRouteInvariants } from '../geo/route';
 
 type End = { trail: Trail; side: 0 | 1; point: Px };
 type Insertion = { index: number; t: number; point: Px };
@@ -265,7 +266,9 @@ export function snapTrailEnds(features: readonly Feature[], opts: SnapOptions): 
       const points = trail.pts.slice();
       if (startChanged) points[0] = startTarget!;
       if (endChanged) points[points.length - 1] = endTarget!;
-      updated.push({ ...trail, pts: points });
+      const { route: _, ...trailBase } = trail;
+      const route = trail.route && validateRouteInvariants(points, trail.route).valid ? trail.route : undefined;
+      updated.push({ ...trailBase, pts: points, ...(route ? { route } : {}) });
       continue;
     }
     const points: Px[] = [];
@@ -286,7 +289,9 @@ export function snapTrailEnds(features: readonly Feature[], opts: SnapOptions): 
     const end = endTarget;
     if (end) points[points.length - 1] = end;
     if (points.length === trail.pts.length && points.every((point, index) => samePoint(point, trail.pts[index]!))) continue;
-    updated.push({ ...trail, pts: points });
+    const { route: _, ...trailBase } = trail;
+    const route = trail.route && validateRouteInvariants(points, trail.route).valid ? trail.route : undefined;
+    updated.push({ ...trailBase, pts: points, ...(route ? { route } : {}) });
   }
   return { updated, removed: [] };
 }
@@ -483,10 +488,11 @@ export function splitTrail(trail: Trail, vertexIndex: number, newId: FeatureId):
     throw new RangeError(`vertexIndex must be between 1 and ${trail.pts.length - 2}`);
   }
   const shared = trail.pts[vertexIndex]!;
+  const { route: _, ...trailBase } = trail;
   return {
     updated: [
-      { ...trail, pts: trail.pts.slice(0, vertexIndex + 1) },
-      { ...trail, id: newId, name: `${trail.name} (2)`, pts: [shared, ...trail.pts.slice(vertexIndex + 1)] },
+      { ...trailBase, pts: trail.pts.slice(0, vertexIndex + 1) },
+      { ...trailBase, id: newId, name: `${trail.name} (2)`, pts: [shared, ...trail.pts.slice(vertexIndex + 1)] },
     ],
     removed: [],
   };
@@ -508,7 +514,8 @@ export function joinTrails(a: Trail, b: Trail): TopologyEdit {
   options.sort((x, y) => x.distance2 - y.distance2);
   const best = options[0]!;
   const tail = best.distance2 <= 0.25 ? best.right.slice(1) : best.right;
-  return { updated: [{ ...a, pts: [...best.left, ...tail] }], removed: [b.id] };
+  const { route: _, ...aBase } = a;
+  return { updated: [{ ...aBase, pts: [...best.left, ...tail] }], removed: [b.id] };
 }
 
 /** Add a separate connector trail between two exact locations, inserting interior vertices. */
@@ -553,7 +560,11 @@ export function connectTrailPoints(
         if (!pts.some((point) => samePoint(point, end.point))) pts.push(end.point);
       }
     }
-    if (pts.length !== trail.pts.length) updated.push({ ...trail, pts });
+    if (pts.length !== trail.pts.length) {
+      const { route: _, ...trailBase } = trail;
+      const route = trail.route && validateRouteInvariants(pts, trail.route).valid ? trail.route : undefined;
+      updated.push({ ...trailBase, pts, ...(route ? { route } : {}) });
+    }
   }
   return { updated: [...updated, { ...connector, pts: [a.point, ...connector.pts.slice(1, -1), b.point] }], removed: [] };
 }

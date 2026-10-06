@@ -10,6 +10,8 @@ function geoJsonFeature(f: GeoFeature, opts: ExportOptions) {
   const properties = {
     name: f.name,
     kind: isPoi ? f.poiType : f.kind,
+    route: f.kind === 'trail' && f.route ? f.route.kind : undefined,
+    direction: f.kind === 'trail' && f.route && f.route.kind === 'loop' ? f.route.direction : undefined,
     description: featureDescription(f, opts.units) || undefined,
     stroke: isPoi ? undefined : featureColor(f),
     'marker-color': isPoi ? featureColor(f) : undefined,

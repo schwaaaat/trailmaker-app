@@ -19,14 +19,22 @@ import type {
   HexColor,
   HistoryCommand,
   LatLon,
+  LoopDirection,
   PoiType,
   Project,
   Px,
   Rgb,
   TopologyEdit,
   TraceSettings,
+  TrailRoute,
   Units,
 } from '../core/types';
+import {
+  canCloseAsLoop,
+  reverseLoop,
+  rotateLoop,
+  validateRouteInvariants,
+} from '../core/geo/route';
 
 /** An edit the prototype refuses with a message instead of applying. */
 export interface EditRefusal {
@@ -287,8 +295,31 @@ export function moveVertex(p: Project, id: FeatureId, index: number, to: Px): Hi
     return replaceFeature(p, 'Move point', key, { ...f, at: to });
   }
   if (index < 0 || index >= f.pts.length) throw new Error(`Vertex ${index} out of range for ${id}`);
-  const pts = f.pts.map((pt, i) => (i === index ? to : pt));
-  return replaceFeature(p, 'Move vertex', key, { ...f, pts });
+  let pts = f.pts.map((pt, i) => (i === index ? to : pt));
+  let route = f.kind === 'trail' ? f.route : undefined;
+
+  if (f.kind === 'trail' && route?.kind === 'loop' && pts.length >= 2) {
+    if (index === 0) {
+      pts = pts.map((pt, i) => (i === pts.length - 1 ? to : pt));
+    } else if (index === pts.length - 1) {
+      pts = pts.map((pt, i) => (i === 0 ? to : pt));
+    }
+  }
+
+  if (f.kind === 'trail' && route) {
+    const inv = validateRouteInvariants(pts, route);
+    if (!inv.valid) {
+      route = undefined;
+    }
+  }
+
+  const nextFeature: Feature =
+    f.kind === 'trail'
+      ? route
+        ? { ...f, pts, route }
+        : (({ route: _, ...rest }) => ({ ...rest, pts }))(f)
+      : { ...f, pts };
+  return replaceFeature(p, 'Move vertex', key, nextFeature);
 }
 
 /** Delete one vertex. Refused (prototype message) when it would leave a trail < 2 or an area < 3 points. */
@@ -307,8 +338,40 @@ export function deleteVertex(
       error: `${article} ${f.kind} needs at least ${min} points. Delete it from the sidebar instead.`,
     };
   }
-  const pts = f.pts.filter((_, i) => i !== index);
-  return replaceFeature(p, 'Delete vertex', null, { ...f, pts });
+  let pts: readonly Px[];
+  let route = f.kind === 'trail' ? f.route : undefined;
+
+  if (f.kind === 'trail' && route?.kind === 'loop') {
+    if (index === 0 || index === f.pts.length - 1) {
+      // Deleting either occurrence of the coincident trailhead removes that vertex,
+      // promotes the adjacent vertex (index 1) to the new trailhead, and closes at it.
+      const remaining = f.pts.slice(1, -1);
+      if (remaining.length >= 2) {
+        pts = [...remaining, [remaining[0]![0], remaining[0]![1]] as Px];
+      } else {
+        pts = remaining;
+      }
+    } else {
+      pts = f.pts.filter((_, i) => i !== index);
+    }
+  } else {
+    pts = f.pts.filter((_, i) => i !== index);
+  }
+
+  if (f.kind === 'trail' && route) {
+    const inv = validateRouteInvariants(pts, route);
+    if (!inv.valid) {
+      route = undefined;
+    }
+  }
+
+  const nextFeature: Feature =
+    f.kind === 'trail'
+      ? route
+        ? { ...f, pts, route }
+        : (({ route: _, ...rest }) => ({ ...rest, pts }))(f)
+      : { ...f, pts };
+  return replaceFeature(p, 'Delete vertex', null, nextFeature);
 }
 
 /** Replace a trail's points and ink (prototype "continue trail" finishing onto an existing trail). */
@@ -321,14 +384,116 @@ export function replaceTrailPoints(
   const f = p.features[indexById(p.features, id, 'Feature')]!;
   if (f.kind !== 'trail') throw new Error(`Feature ${id} is not a trail`);
   if (pts.length < 2) throw new Error('A trail needs at least 2 points.');
-  return replaceFeature(p, 'Continue trail', null, { ...f, pts, ink });
+  let route = f.route;
+  if (route && !validateRouteInvariants(pts, route).valid) {
+    route = undefined;
+  }
+  const { route: _, ...fBase } = f;
+  return replaceFeature(p, 'Continue trail', null, {
+    ...fBase,
+    pts,
+    ink,
+    ...(route ? { route } : {}),
+  });
 }
 
 /** Reverse a trail's direction. */
 export function reverseTrail(p: Project, id: FeatureId): HistoryCommand {
   const f = p.features[indexById(p.features, id, 'Feature')]!;
   if (f.kind !== 'trail') throw new Error(`Feature ${id} is not a trail`);
+  if (f.route?.kind === 'loop') {
+    const pts = reverseLoop(f.pts);
+    const direction = f.route.direction === 'clockwise' ? 'counterclockwise' : 'clockwise';
+    return replaceFeature(p, 'Reverse loop direction', null, {
+      ...f,
+      pts,
+      route: { kind: 'loop', direction },
+    });
+  }
   return replaceFeature(p, 'Reverse trail', null, { ...f, pts: [...f.pts].reverse() });
+}
+
+/** Classify a trail as one-way or loop, or clear its classification. (T-334) */
+export function setTrailRoute(
+  p: Project,
+  id: FeatureId,
+  route: TrailRoute | { readonly kind: 'loop'; readonly direction?: LoopDirection } | undefined,
+  snapTolerancePx = 10,
+): HistoryCommand | EditRefusal {
+  const f = p.features[indexById(p.features, id, 'Feature')]!;
+  if (f.kind !== 'trail') throw new Error(`Feature ${id} is not a trail`);
+  const { route: _, ...fBase } = f;
+  if (route === undefined) {
+    return replaceFeature(p, 'Clear route classification', null, fBase);
+  }
+  if (route.kind === 'one-way') {
+    if (f.pts.length < 2) {
+      return { error: 'A one-way trail needs at least 2 points.' };
+    }
+    const first = f.pts[0]!;
+    const last = f.pts[f.pts.length - 1]!;
+    if (first[0] === last[0] && first[1] === last[1]) {
+      return { error: 'A closed trail cannot be marked as a one-way route.' };
+    }
+    return replaceFeature(p, 'Mark as one-way', null, { ...fBase, route: { kind: 'one-way' } });
+  }
+  if (route.kind === 'loop') {
+    const close = canCloseAsLoop(f.pts, snapTolerancePx);
+    if (!close.ok) {
+      return { error: close.error };
+    }
+    const direction = route.direction ?? close.direction;
+    let pts = close.pts;
+    if (close.direction !== direction) {
+      pts = reverseLoop(pts);
+    }
+    return replaceFeature(p, 'Mark as loop', null, {
+      ...fBase,
+      pts,
+      route: { kind: 'loop', direction },
+    });
+  }
+  throw new Error(`Unknown route kind "${(route as { kind?: unknown }).kind}"`);
+}
+
+/** Set the start of a one-way trail (side 0 keeps start, side 1 reverses geometry so end becomes start). */
+export function setOneWayStart(p: Project, id: FeatureId, side: 0 | 1): HistoryCommand {
+  const f = p.features[indexById(p.features, id, 'Feature')]!;
+  if (f.kind !== 'trail') throw new Error(`Feature ${id} is not a trail`);
+  if (f.route?.kind !== 'one-way') throw new Error(`Trail ${id} is not a one-way route`);
+  if (side === 0) {
+    return replaceFeature(p, 'Change trailhead', null, { ...f });
+  }
+  return replaceFeature(p, 'Change trailhead', null, { ...f, pts: [...f.pts].reverse() });
+}
+
+/** Rotate a closed loop so that the vertex at vertexIndex becomes the trailhead. */
+export function setLoopStart(p: Project, id: FeatureId, vertexIndex: number): HistoryCommand {
+  const f = p.features[indexById(p.features, id, 'Feature')]!;
+  if (f.kind !== 'trail') throw new Error(`Feature ${id} is not a trail`);
+  if (f.route?.kind !== 'loop') throw new Error(`Trail ${id} is not a loop`);
+  const pts = rotateLoop(f.pts, vertexIndex);
+  return replaceFeature(p, 'Change trailhead', null, { ...f, pts });
+}
+
+/** Set the travel direction of a loop ('clockwise' or 'counterclockwise'). */
+export function setLoopDirection(
+  p: Project,
+  id: FeatureId,
+  direction: LoopDirection,
+): HistoryCommand {
+  const f = p.features[indexById(p.features, id, 'Feature')]!;
+  if (f.kind !== 'trail') throw new Error(`Feature ${id} is not a trail`);
+  if (f.route?.kind !== 'loop') throw new Error(`Trail ${id} is not a loop`);
+  if (f.route.direction === direction) {
+    return replaceFeature(p, 'Set loop direction', null, { ...f });
+  }
+  const pts = reverseLoop(f.pts);
+  return replaceFeature(p, 'Set loop direction', null, {
+    ...f,
+    pts,
+    route: { kind: 'loop', direction },
+  });
 }
 
 /** Delete a feature; undo restores it at its original position in the list. */
@@ -382,7 +547,17 @@ export function setFeaturePoints(
 ): HistoryCommand {
   const f = p.features[indexById(p.features, id, 'Feature')]!;
   if (f.kind === 'poi') throw new Error(`Feature ${id} is a point, cannot simplify points`);
-  return replaceFeature(p, label, null, { ...f, pts });
+  let route = f.kind === 'trail' ? f.route : undefined;
+  if (f.kind === 'trail' && route && !validateRouteInvariants(pts, route).valid) {
+    route = undefined;
+  }
+  const nextFeature: Feature =
+    f.kind === 'trail'
+      ? route
+        ? { ...f, pts, route }
+        : (({ route: _, ...rest }) => ({ ...rest, pts }))(f)
+      : { ...f, pts };
+  return replaceFeature(p, label, null, nextFeature);
 }
 
 /**
@@ -394,7 +569,15 @@ export function simplifyFeatures(
   label = 'Simplify all trails',
 ): HistoryCommand {
   const prevFeatures = p.features;
-  const updateMap = new Map(updated.map((f) => [f.id, f]));
+  const updateMap = new Map(
+    updated.map((f) => {
+      if (f.kind === 'trail' && f.route && !validateRouteInvariants(f.pts, f.route).valid) {
+        const { route: _, ...fBase } = f;
+        return [f.id, fBase as Feature];
+      }
+      return [f.id, f];
+    }),
+  );
   const features = prevFeatures.map((f) => updateMap.get(f.id) ?? f);
   return makeCommand(
     p,

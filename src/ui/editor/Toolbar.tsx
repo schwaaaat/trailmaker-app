@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { TOUCH_HINT_STORAGE_KEY } from '../../io/settings';
 import { useApp } from '../../state/hooks';
-import { setHelpOpen, type Tool } from '../../state/store';
+import { setHelpOpen, setBoxSelectMode, type Tool } from '../../state/store';
+import { previewAutoJoin, applyAutoJoin, cancelAutoJoin } from '../../state/topology-actions';
 import { currentEditor } from './EditorStage';
 import { chooseTool, redoAction, tipFor, undoAction } from './tools';
 import { startRefinement } from '../panels/refine-actions';
@@ -79,6 +80,82 @@ export const TOOLS: readonly { tool: Tool; label: string; title: string; key: st
   { tool: 'connect', label: 'Connect', title: 'Connect two points on trails', key: 'C' },
 ];
 
+function BoxSelectionControls() {
+  const mode = useApp((s) => s.boxSelectMode);
+  const count = useApp((s) => s.selectedTrailIds?.length ?? 0);
+  const preview = useApp((s) => s.boxJoinPreview);
+  const features = useApp((s) => s.session?.project.features);
+  const blocked = useApp((s) => !!s.draft || !!s.job || !!s.refinePreview);
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Box select trails"
+        aria-pressed={mode}
+        aria-keyshortcuts="B"
+        title="Box select trails (B)"
+        disabled={blocked}
+        onClick={() => {
+          setBoxSelectMode(!mode);
+          currentEditor()?.element?.focus();
+        }}
+      >
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          <rect x="4" y="4" width="16" height="16" strokeDasharray="4 3" />
+        </svg>
+        <span className="lbl">Box select</span>
+      </button>
+      {count > 0 && <span role="status">{count} trails selected</span>}
+      {count > 0 && (
+        <button
+          type="button"
+          aria-label="Preview auto-join"
+          aria-keyshortcuts="J"
+          disabled={blocked || mode || count < 2}
+          onClick={() => previewAutoJoin(currentEditor()?.view.s ?? 1)}
+        >
+          Preview auto-join
+        </button>
+      )}
+      {preview && (
+        <span role="group" aria-label="Auto-join preview">
+          <span role="status">
+            {preview.proposal.chainCount} chains to join; {preview.proposal.ambiguousJunctionCount}{' '}
+            ambiguous junctions left separate.
+          </span>
+          {preview.proposal.ambiguousTrailIds.length > 0 && (
+            <span role="note" aria-label="Trails at ambiguous junctions">
+              Left separate at junctions:{' '}
+              {preview.proposal.ambiguousTrailIds
+                .map((id) => features?.find((f) => f.id === id)?.name ?? id)
+                .join(', ')}
+              .
+            </span>
+          )}
+          <button
+            type="button"
+            disabled={!preview.proposal.edit.updated.length}
+            onClick={applyAutoJoin}
+          >
+            Apply auto-join
+          </button>
+          <button type="button" onClick={cancelAutoJoin}>
+            Cancel auto-join
+          </button>
+        </span>
+      )}
+    </>
+  );
+}
+
 export function Toolbar() {
   const open = useApp((s) => s.session !== null);
   const tool = useApp((s) => s.tool);
@@ -122,70 +199,82 @@ export function Toolbar() {
   // not, so the toolbar landmark and that one button stay mounted either way -- a user can check
   // the shortcuts before opening a map.
   return (
-    <div className="toolbar" role="toolbar" aria-label="Map tools">
-      {open && (
-        <>
-          {TOOLS.map((t, i) => (
-            <span key={t.tool} className="toolbar-group">
-              {i === 1 || i === 2 ? <span className="sep" aria-hidden="true" /> : null}
-              <button
-                type="button"
-                aria-label={t.label}
-                aria-pressed={tool === t.tool}
-                aria-keyshortcuts={t.key}
-                title={`${t.title} (${t.key})`}
-                onClick={() => chooseTool(t.tool)}
-              >
-                <Icon name={t.tool} />
-                <span className="lbl" aria-hidden="true">
-                  {t.label}
-                </span>{' '}
-                <kbd aria-hidden="true">{t.key}</kbd>
-              </button>
-            </span>
-          ))}
-          <button
-            type="button"
-            aria-label="Fit map to view"
-            aria-keyshortcuts="F"
-            title="Fit map to view (F)"
-            onClick={() => currentEditor()?.fitView()}
-          >
-            <Icon name="fit" />
-          </button>
-          <button
-            type="button"
-            aria-label="Undo"
-            aria-keyshortcuts="Control+Z Meta+Z"
-            title="Undo (Ctrl+Z)"
-            disabled={!canUndo && !drafting && !reviewCanUndo}
-            onClick={undoAction}
-          >
-            <Icon name="undo" />
-          </button>
-          <button
-            type="button"
-            aria-label="Redo"
-            aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
-            title="Redo (Ctrl+Shift+Z)"
-            disabled={!canRedo || drafting}
-            onClick={redoAction}
-          >
-            <Icon name="redo" />
-          </button>
-          <span className="sep" aria-hidden="true" />
-        </>
+    <>
+      <div className="toolbar" role="toolbar" aria-label="Map tools">
+        {open && (
+          <>
+            {TOOLS.map((t, i) => (
+              <span key={t.tool} className="toolbar-group">
+                {i === 1 || i === 2 ? <span className="sep" aria-hidden="true" /> : null}
+                <button
+                  type="button"
+                  aria-label={t.label}
+                  aria-pressed={tool === t.tool}
+                  aria-keyshortcuts={t.key}
+                  title={`${t.title} (${t.key})`}
+                  onClick={() => chooseTool(t.tool)}
+                >
+                  <Icon name={t.tool} />
+                  <span className="lbl" aria-hidden="true">
+                    {t.label}
+                  </span>{' '}
+                  <kbd aria-hidden="true">{t.key}</kbd>
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              aria-label="Fit map to view"
+              aria-keyshortcuts="F"
+              title="Fit map to view (F)"
+              onClick={() => currentEditor()?.fitView()}
+            >
+              <Icon name="fit" />
+            </button>
+            <button
+              type="button"
+              aria-label="Undo"
+              aria-keyshortcuts="Control+Z Meta+Z"
+              title="Undo (Ctrl+Z)"
+              disabled={!canUndo && !drafting && !reviewCanUndo}
+              onClick={undoAction}
+            >
+              <Icon name="undo" />
+            </button>
+            <button
+              type="button"
+              aria-label="Redo"
+              aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+              title="Redo (Ctrl+Shift+Z)"
+              disabled={!canRedo || drafting}
+              onClick={redoAction}
+            >
+              <Icon name="redo" />
+            </button>
+            <span className="sep" aria-hidden="true" />
+          </>
+        )}
+        <button
+          type="button"
+          aria-label="Keyboard shortcuts"
+          aria-keyshortcuts="?"
+          title="Keyboard shortcuts (?)"
+          onClick={() => setHelpOpen(true)}
+        >
+          ?
+        </button>
+      </div>
+      {open && tool === 'select' && (
+        <div
+          className="toolbar"
+          role="group"
+          aria-label="Trail selection actions"
+          style={{ top: 'auto', left: 'auto', right: 12, bottom: 64 }}
+        >
+          <BoxSelectionControls />
+        </div>
       )}
-      <button
-        type="button"
-        aria-label="Keyboard shortcuts"
-        aria-keyshortcuts="?"
-        title="Keyboard shortcuts (?)"
-        onClick={() => setHelpOpen(true)}
-      >
-        ?
-      </button>
-    </div>
+    </>
   );
 }
 
@@ -230,8 +319,11 @@ export function TipLine() {
   const tool = useApp((s) => s.tool);
   const smartFollow = useApp((s) => s.session?.project.trace.smartFollow ?? false);
   const reviewing = useApp((s) => s.candidates !== null);
+  const boxMode = useApp((s) => s.boxSelectMode);
   const state = { hasMap, tool, smartFollow, reviewing };
-  const text = tipFor({ ...state, coarsePointer });
+  const text = boxMode
+    ? 'Drag a box or tap two corners. Keyboard: Enter sets a corner, arrows size the box, Enter selects; Escape cancels.'
+    : tipFor({ ...state, coarsePointer });
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
     const media = window.matchMedia('(pointer: coarse)');
@@ -264,7 +356,7 @@ export function TipLine() {
           {collapsed ? '?' : '×'}
         </button>
       )}
-      {(!coarsePointer || !collapsed) && <span className="tip-text">{text}</span>}
+      {(!coarsePointer || !collapsed || boxMode) && <span className="tip-text">{text}</span>}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   setJoinArmed,
   setKeyboardMode,
   setTool,
+  setBoxSelectMode,
   undo,
 } from '../../state/store';
 import { Editor } from './Editor';
@@ -51,6 +52,112 @@ const proj = () => st().session!.project;
 /** Canvas-local screen point of an image pixel under the current view. */
 const scr = (p: Px) => toScr(ed.view, p) as [number, number];
 const click = (p: Px) => tap(canvas, scr(p));
+
+describe('box selecting trails (T-333)', () => {
+  const chain = (id: string, from: Px, to: Px): Feature => ({ ...trail, id, pts: [from, to] });
+  it('selects every crossing trail under forward/reverse drags and transformed views', () => {
+    open(
+      makeProject({
+        features: [
+          chain('a', [0, 100], [300, 100]),
+          chain('b', [300, 100], [500, 100]),
+          chain('c', [500, 100], [900, 100]),
+          chain('outside', [0, 200], [900, 200]),
+        ],
+      }),
+    );
+    for (const reverse of [false, true]) {
+      ed.panBy(24, 16);
+      ed.zoomBy(1.2);
+      setBoxSelectMode(true);
+      dragFrom(
+        canvas,
+        scr(reverse ? [600, 120] : [200, 80]),
+        scr(reverse ? [200, 80] : [600, 120]),
+      );
+      expect(st().selectedTrailIds).toEqual(['a', 'b', 'c']);
+      expect(st().boxSelectMode).toBe(false);
+    }
+  });
+  it('supports touch drag and two corner taps; a pinch cancels without selecting', () => {
+    setBoxSelectMode(true);
+    const [x0, y0] = scr([80, 80]);
+    const [x1, y1] = scr([320, 120]);
+    ptr(canvas, 'pointerdown', x0, y0, { pointerType: 'touch' });
+    ptr(canvas, 'pointermove', x1, y1, { pointerType: 'touch' });
+    ptr(canvas, 'pointerup', x1, y1, { pointerType: 'touch' });
+    expect(st().selectedTrailIds).toEqual(['f1']);
+    setBoxSelectMode(true);
+    for (const point of [
+      [80, 80],
+      [320, 120],
+    ] as Px[]) {
+      const [x, y] = scr(point);
+      ptr(canvas, 'pointerdown', x, y, { pointerType: 'touch' });
+      ptr(canvas, 'pointerup', x, y, { pointerType: 'touch' });
+    }
+    expect(st().selectedTrailIds).toEqual(['f1']);
+    const selected = st().selectedTrailIds;
+    setBoxSelectMode(true);
+    touchDragBecomesPinch([80, 80]);
+    expect(st().selectedTrailIds).toBe(selected);
+    expect(st().boxSelectMode).toBe(false);
+  });
+  it('sizes a keyboard rectangle, previews with J, applies with Enter, and undoes once', () => {
+    const [x, y] = ed.centerPointerAt().px;
+    open(
+      makeProject({
+        features: [
+          chain('a', [x - 100, y + 5], [x + 10, y + 5]),
+          chain('b', [x + 10, y + 5], [x + 100, y + 5]),
+        ],
+      }),
+    );
+    key('b');
+    expect(document.activeElement).toBe(canvas);
+    key('Enter', {}, canvas);
+    key('ArrowRight', {}, canvas);
+    key('ArrowDown', {}, canvas);
+    key('Enter', {}, canvas);
+    expect(st().selectedTrailIds).toEqual(['a', 'b']);
+    key('j', {}, canvas);
+    expect(st().boxJoinPreview?.proposal.chainCount).toBe(1);
+    const before = proj();
+    key('Enter', {}, canvas);
+    expect(proj().features).toHaveLength(1);
+    undo();
+    expect(proj()).toStrictEqual(before);
+  });
+  it('Escape cancels a keyboard rectangle and does not alter the project', () => {
+    const before = proj();
+    key('b');
+    key('Enter', {}, canvas);
+    key('ArrowDown', {}, canvas);
+    key('Escape', {}, canvas);
+    expect(st().boxSelectMode).toBe(false);
+    expect(st().selectedTrailIds).toEqual([]);
+    expect(proj()).toBe(before);
+  });
+  it('does not apply a join when Enter belongs to a focused panel button; Escape still cancels', () => {
+    open(
+      makeProject({
+        features: [chain('a', [100, 100], [200, 100]), chain('b', [200, 100], [300, 100])],
+      }),
+    );
+    setBoxSelectMode(true);
+    dragFrom(canvas, scr([150, 90]), scr([250, 110]));
+    key('j', {}, canvas);
+    expect(st().boxJoinPreview?.proposal.chainCount).toBe(1);
+    const before = proj();
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    key('Enter', {}, button);
+    expect(proj()).toBe(before);
+    key('Escape', {}, button);
+    expect(st().boxJoinPreview).toBeNull();
+  });
+});
 
 function touchDragBecomesPinch(at: Px): void {
   const [x, y] = scr(at);

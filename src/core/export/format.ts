@@ -7,15 +7,21 @@ export function formatLength(meters: number, units: Units): string {
   return meters < 1000 ? Math.round(meters) + ' m' : (meters / 1000).toFixed(2) + ' km';
 }
 
-/** Notes plus "Length: …" (trail) or "Perimeter: …" (area), newline-joined; POIs get notes only. */
+/** Notes plus route details (if classified) plus "Length: …" (trail) or "Perimeter: …" (area), newline-joined; POIs get notes only. */
 export function featureDescription(f: GeoFeature, units: Units): string {
+  const routeLine =
+    f.kind === 'trail' && f.route
+      ? f.route.kind === 'one-way'
+        ? 'Route: One-way'
+        : `Route: Loop (${f.route.direction})`
+      : '';
   const measure =
     f.kind === 'trail'
       ? 'Length: ' + formatLength(f.lengthM, units)
       : f.kind === 'area'
         ? 'Perimeter: ' + formatLength(f.lengthM, units)
         : '';
-  return [f.notes, measure].filter(Boolean).join('\n');
+  return [f.notes, routeLine, measure].filter(Boolean).join('\n');
 }
 
 /** File-name slug: lower-case, non-alphanumerics to "-", trimmed; "park-map" if empty. */
